@@ -1,0 +1,5 @@
+{
+  "name": "BXO CV Analyzer",
+  "description": "AI-powered CV analyzer that extracts candidate info, calculates a BXO score, and syncs with Google Drive and Sheets.",
+  "requestFramePermissions": []
+}
