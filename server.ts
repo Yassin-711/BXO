@@ -16,6 +16,135 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { google } from "googleapis";
 import { Readable } from "stream";
 
+const VITAE_RUBRIC = [
+  { id: "education", max: 20, label: "Education & qualifications" },
+  { id: "experience", max: 35, label: "Professional experience" },
+  { id: "skills", max: 25, label: "Skills & tools" },
+  { id: "languages", max: 10, label: "Languages" },
+  { id: "certsProjects", max: 10, label: "Certifications & projects" },
+] as const;
+
+type VitaeBreakdownRow = {
+  criterionId: string;
+  maxPoints: number;
+  earned: number;
+  evidence: string;
+};
+
+function buildCvAnalysisPrompt(cvText: string): string {
+  const rubricBlock = VITAE_RUBRIC.map(
+    (r) => `- \`${r.id}\` — max ${r.max} pts: ${r.label}`,
+  ).join("\n");
+
+  return `You are a strict CV evaluator. Score ONLY with the rubric below. Do not bump or cut the total for "overall feel".
+
+## Rubric (fixed weights — sum of max = 100)
+${rubricBlock}
+
+## Rules
+1. Output exactly **five** breakdown rows, **one per id above**, in this order: ${VITAE_RUBRIC.map((r) => r.id).join(", ")}.
+2. For each row set **maxPoints** to that category's max from the rubric. **earned** is an integer with 0 ≤ earned ≤ maxPoints.
+3. **education:** no usable education → earned near 0; full use only with clear degree/field.
+4. **experience:** no jobs/internships → low score; weight years, relevance, progression, outcomes if stated.
+5. **skills:** breadth/depth of tools, domains, methods explicitly listed.
+6. **languages:** only if stated; else earned ≤ 2.
+7. **certsProjects:** certs, strong projects, publications — 0 if none.
+8. **evidence:** one short quote or tight paraphrase from the CV for that category; if nothing applies use "Not stated in CV".
+9. **vitaeScore** must equal the sum of all **earned** (same integer sum you use in breakdown).
+10. Do not invent employers, degrees, or skills not supported by the text.
+11. Extract **name**, **majors**, **languages** (summary line), **skills** (comma-separated). **reasoning** = 2–3 sentences aligned with the breakdown totals.
+
+## CV plain text
+${cvText}`;
+}
+
+function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<string, unknown> {
+  const rubricMax = new Map<string, number>(VITAE_RUBRIC.map((r) => [r.id, r.max]));
+  const byId = new Map<string, VitaeBreakdownRow>();
+  const rawBreakdown = analysis.breakdown;
+
+  if (Array.isArray(rawBreakdown)) {
+    for (const raw of rawBreakdown) {
+      if (!raw || typeof raw !== "object") continue;
+      const row = raw as Record<string, unknown>;
+      const criterionId = String(row.criterionId ?? "").trim();
+      const maxAllowed = rubricMax.get(criterionId);
+      if (maxAllowed === undefined) continue;
+
+      let earned = Math.round(Number(row.earned));
+      if (!Number.isFinite(earned)) earned = 0;
+      earned = Math.max(0, Math.min(maxAllowed, earned));
+
+      const evidence =
+        typeof row.evidence === "string" && row.evidence.trim().length > 0
+          ? row.evidence.trim().slice(0, 500)
+          : "Not stated in CV";
+
+      byId.set(criterionId, {
+        criterionId,
+        maxPoints: maxAllowed,
+        earned,
+        evidence,
+      });
+    }
+  }
+
+  const breakdown: VitaeBreakdownRow[] = VITAE_RUBRIC.map((r) => {
+    return (
+      byId.get(r.id) ?? {
+        criterionId: r.id,
+        maxPoints: r.max,
+        earned: 0,
+        evidence: "Not scored — missing from model output.",
+      }
+    );
+  });
+
+  const vitaeScore = breakdown.reduce((s, row) => s + row.earned, 0);
+
+  return {
+    ...analysis,
+    breakdown,
+    vitaeScore,
+  };
+}
+
+/** Service accounts have no personal Drive quota; uploads must target a folder on a Shared Drive (driveId set). */
+async function getFolderDriveContext(
+  drive: ReturnType<typeof google.drive>,
+  folderId: string
+): Promise<{ ok: true; driveId: string; name: string } | { ok: false; reason: string }> {
+  try {
+    const { data } = await drive.files.get({
+      fileId: folderId,
+      supportsAllDrives: true,
+      fields: "id,name,mimeType,driveId",
+    });
+    if (data.mimeType !== "application/vnd.google-apps.folder") {
+      return { ok: false, reason: "GOOGLE_DRIVE_FOLDER_ID is not a folder." };
+    }
+    if (!data.driveId) {
+      return {
+        ok: false,
+        reason:
+          "This folder is in personal My Drive. Service accounts cannot store files there (no storage quota). Move or create a folder inside a Google Shared Drive (Team Drive), share it with the service account as Content Manager, then set GOOGLE_DRIVE_FOLDER_ID to that folder's ID.",
+      };
+    }
+    return { ok: true, driveId: data.driveId, name: data.name ?? folderId };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    const code = e?.code ?? e?.status;
+    if (code === 404) {
+      return {
+        ok: false,
+        reason:
+          "Folder not found or the service account cannot access it. Confirm GOOGLE_DRIVE_FOLDER_ID and that the service account can open this folder (Shared Drive: grant at least Contributor/Content Manager).",
+      };
+    }
+    return { ok: false, reason: `Could not verify folder: ${msg}` };
+  }
+}
+
 // --- Configuration ---
 const PORT = Number(process.env.PORT) || 3000;
 const upload = multer({ storage: multer.memoryStorage() });
@@ -178,21 +307,7 @@ async function startServer() {
         }
 
         const genAI = new GoogleGenAI({ apiKey });
-        const prompt = `Analyze the following CV text and extract structured information.
-        Return ONLY valid JSON in this exact format:
-        {
-          "name": "Candidate Name",
-          "majors": "Field of Study",
-          "languages": "Languages spoken",
-          "skills": "Technical and soft skills",
-          "vitaeScore": 85,
-          "reasoning": "Brief explanation"
-        }
-        ❌ No explanations
-        ❌ No extra text
-        ❌ No markdown
-
-        Text: ${cvText}`;
+        const prompt = buildCvAnalysisPrompt(cvText);
 
         let analysis: any = null;
         let retries = 3;
@@ -204,6 +319,9 @@ async function startServer() {
               model: "gemini-3-flash-preview",
               contents: prompt,
               config: {
+                temperature: 0.1,
+                topP: 0.3,
+                seed: 42,
                 responseMimeType: "application/json",
                 responseSchema: {
                   type: Type.OBJECT,
@@ -212,17 +330,59 @@ async function startServer() {
                     majors: { type: Type.STRING, description: "Fields of study or majors" },
                     languages: { type: Type.STRING, description: "Languages spoken with levels (e.g. English - Fluent)" },
                     skills: { type: Type.STRING, description: "Comma separated list of technical and soft skills" },
-                    vitaeScore: { type: Type.NUMBER, description: "A score from 0 to 100 based on skills, education, certifications, and experience" },
-                    reasoning: { type: Type.STRING, description: "Brief explanation for the score" }
+                    vitaeScore: {
+                      type: Type.NUMBER,
+                      description: "Must equal the sum of breakdown[].earned; integer 0–100",
+                    },
+                    reasoning: {
+                      type: Type.STRING,
+                      description: "2–3 sentences; must align with the rubric breakdown",
+                    },
+                    breakdown: {
+                      type: Type.ARRAY,
+                      description:
+                        "Exactly 5 rows: education, experience, skills, languages, certsProjects in that order",
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          criterionId: {
+                            type: Type.STRING,
+                            description:
+                              "One of: education, experience, skills, languages, certsProjects",
+                          },
+                          maxPoints: {
+                            type: Type.NUMBER,
+                            description: "Category max from rubric (20, 35, 25, 10, or 10)",
+                          },
+                          earned: {
+                            type: Type.NUMBER,
+                            description: "Integer points earned for this category",
+                          },
+                          evidence: {
+                            type: Type.STRING,
+                            description: "Short quote or paraphrase from CV supporting earned points",
+                          },
+                        },
+                        required: ["criterionId", "maxPoints", "earned", "evidence"],
+                      },
+                    },
                   },
-                  required: ["name", "majors", "languages", "skills", "vitaeScore"]
-                }
-              }
+                  required: [
+                    "name",
+                    "majors",
+                    "languages",
+                    "skills",
+                    "vitaeScore",
+                    "reasoning",
+                    "breakdown",
+                  ],
+                },
+              },
             });
 
             const rawText = response.text || "{}";
             console.log("Raw Gemini Text:", rawText);
-            analysis = JSON.parse(rawText);
+            analysis = normalizeVitaeAnalysis(JSON.parse(rawText) as Record<string, unknown>);
             console.log("Gemini analysis successful");
             break;
           } catch (err: any) {
@@ -244,9 +404,10 @@ async function startServer() {
           throw lastError || new Error("Failed to analyze CV after retries");
         }
 
-        // 3. Upload to Google Drive
+        // 3. Upload to Google Drive (folder MUST be on a Shared Drive — service accounts have no My Drive quota)
         let driveLink = "Not Configured";
         let driveStatus = "skipped";
+        let driveMessage: string | undefined;
         const auth = getGoogleAuth();
         
         if (!auth) {
@@ -258,65 +419,68 @@ async function startServer() {
         } else {
           console.log(`Uploading to Google Drive folder: ${DRIVE_FOLDER_ID}...`);
           try {
-            // FIX: Use manual multipart upload as requested to ensure 'parents' are correctly handled
-            // This avoids the 403 "Service Accounts do not have storage quota" error by ensuring
-            // the file is created directly inside the shared folder instead of the service account's root.
-            const boundary = '-------314159265358979323846';
-            const delimiter = "\r\n--" + boundary + "\r\n";
-            const close_delim = "\r\n--" + boundary + "--";
+            const folderCtx = await getFolderDriveContext(drive, DRIVE_FOLDER_ID);
+            if (folderCtx.ok === false) {
+              driveStatus = "requires_shared_drive";
+              driveMessage = folderCtx.reason;
+              console.error("Drive folder check failed:", folderCtx.reason);
+            } else {
+              console.log(
+                `Folder OK on Shared Drive "${folderCtx.name}" (driveId=${folderCtx.driveId}). Uploading PDF...`
+              );
 
-            const metadata = {
-              name: req.file.originalname,
-              parents: [DRIVE_FOLDER_ID]
-            };
+              const pdfStream = Readable.from(req.file.buffer);
+              const createRes = await drive.files.create({
+                requestBody: {
+                  name: req.file.originalname,
+                  parents: [DRIVE_FOLDER_ID],
+                },
+                media: {
+                  mimeType: "application/pdf",
+                  body: pdfStream,
+                },
+                supportsAllDrives: true,
+                fields: "id,name",
+              });
 
-            // CRITICAL: Ensure the service account has 'Content Manager' role on the Shared Drive
-            // to avoid quota errors and allow setting permissions.
-            const multipartRequestBody = Buffer.concat([
-              Buffer.from(delimiter + 'Content-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(metadata)),
-              Buffer.from(delimiter + 'Content-Type: application/pdf\r\n\r\n'),
-              req.file.buffer,
-              Buffer.from(close_delim)
-            ]);
-
-            console.log("Sending multipart upload request to Google Drive (Shared Drive support enabled)...");
-            const driveResponse = await auth.request({
-              // supportsAllDrives=true is critical for Shared Drives / Team Drives
-              url: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true',
-              method: 'POST',
-              headers: {
-                'Content-Type': `multipart/related; boundary=${boundary}`,
-              },
-              body: multipartRequestBody
-            });
-
-            const fileId = (driveResponse.data as any).id;
-            console.log(`Upload success! Shared Drive Folder ID used: ${DRIVE_FOLDER_ID}`);
-            console.log(`File ID returned: ${fileId}`);
-
-            // We still need to set permissions so the link is viewable
-            await drive.permissions.create({
-              fileId: fileId!,
-              supportsAllDrives: true, // Required for files on Shared Drives
-              requestBody: {
-                role: 'reader',
-                type: 'anyone'
+              const fileId = createRes.data.id;
+              if (!fileId) {
+                throw new Error("Drive upload returned no file id");
               }
-            });
+              console.log(`Upload success. File ID: ${fileId}`);
 
-            // FIX 1: Generate direct file link
-            driveLink = `https://drive.google.com/file/d/${fileId}/view`;
-            driveStatus = "success";
-            console.log(`Drive link generated: ${driveLink}`);
+              try {
+                await drive.permissions.create({
+                  fileId,
+                  supportsAllDrives: true,
+                  requestBody: {
+                    role: "reader",
+                    type: "anyone",
+                  },
+                });
+              } catch (permErr: any) {
+                console.warn(
+                  "Could not set link-sharing (anyone) permission; file may still be open to Shared Drive members:",
+                  permErr?.message ?? permErr
+                );
+              }
+
+              driveLink = `https://drive.google.com/file/d/${fileId}/view`;
+              driveStatus = "success";
+              console.log(`Drive link: ${driveLink}`);
+            }
           } catch (driveError: any) {
             driveStatus = "error";
+            driveMessage =
+              driveError?.message ||
+              "Drive upload failed. If you see quota errors, use a folder inside a Shared Drive and grant the service account Content Manager on that drive.";
             console.error("Google Drive Error Details:");
             console.error("Status:", driveError.status || driveError.code);
             console.error("Message:", driveError.message);
-            if (driveError.status === 403) {
-              console.error("Root Cause: 403 Forbidden. This often means 'Service Accounts do not have storage quota'.");
-              console.error("CRITICAL FIX: Ensure the target folder is inside a SHARED DRIVE (Team Drive).");
-              console.error("CRITICAL FIX: Ensure the service account (cv-analyzer-bot@boreal-ward-472922-e3.iam.gserviceaccount.com) has the 'Content Manager' role on that Shared Drive.");
+            if (driveError.status === 403 || String(driveError.message).includes("storage quota")) {
+              console.error(
+                "Fix: Use GOOGLE_DRIVE_FOLDER_ID pointing to a folder inside a Team/Shared Drive (not My Drive). Add the service account to that drive with Content Manager."
+              );
             }
           }
         }
@@ -365,6 +529,7 @@ async function startServer() {
           ...analysis,
           driveLink,
           driveStatus,
+          driveMessage,
           sheetStatus,
           success: true
         });

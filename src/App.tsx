@@ -15,6 +15,21 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
+interface ScoreBreakdownRow {
+  criterionId: string;
+  maxPoints: number;
+  earned: number;
+  evidence: string;
+}
+
+const BREAKDOWN_LABELS: Record<string, string> = {
+  education: 'Education',
+  experience: 'Experience',
+  skills: 'Skills & tools',
+  languages: 'Languages',
+  certsProjects: 'Certs & projects',
+};
+
 interface AnalysisResult {
   name: string;
   majors: string;
@@ -22,8 +37,10 @@ interface AnalysisResult {
   skills: string;
   vitaeScore: number;
   reasoning?: string;
+  breakdown?: ScoreBreakdownRow[];
   driveLink: string;
   driveStatus?: string;
+  driveMessage?: string;
   sheetStatus?: string;
   success: boolean;
 }
@@ -140,7 +157,9 @@ export default function App() {
               transition={{ duration: 0.5 }}
             >
               <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight leading-[1.1] mb-6">
-                Intelligent <span className="text-indigo-600">CV Analysis</span> for Modern Teams.
+                Intelligent <span className="text-indigo-600">CV analysis</span> tool for{' '}
+                <span className="text-indigo-600">OGT AIESEC</span> in{' '}
+                <span className="text-indigo-600">Alexandria</span>
               </h1>
               <p className="text-lg text-slate-600 leading-relaxed max-w-md">
                 Upload a PDF resume to extract key insights, calculate a BXO Score, and sync directly to your Google ecosystem.
@@ -170,6 +189,10 @@ export default function App() {
                 </motion.div>
               ))}
             </div>
+
+            <p className="text-sm text-slate-500 pt-2">
+              made by Yassin Elhawash LCVP BXO
+            </p>
           </div>
 
           {/* Right Column: Upload & Results */}
@@ -292,8 +315,38 @@ export default function App() {
                       <div className={`text-4xl font-black ${result.vitaeScore > 80 ? 'text-emerald-500' : result.vitaeScore > 50 ? 'text-amber-500' : 'text-slate-900'}`}>
                         {result.vitaeScore}
                       </div>
+                      <div className="text-[10px] text-slate-400 font-medium mt-1 max-w-[140px] ml-auto leading-tight">
+                        Weighted rubric (server-verified sum)
+                      </div>
                     </div>
                   </div>
+
+                  {result.breakdown && result.breakdown.length > 0 && (
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+                      <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Score breakdown</div>
+                      <ul className="space-y-3">
+                        {result.breakdown.map((row) => (
+                          <li key={row.criterionId} className="text-sm">
+                            <div className="flex justify-between gap-2 font-medium text-slate-800">
+                              <span>{BREAKDOWN_LABELS[row.criterionId] ?? row.criterionId}</span>
+                              <span className="tabular-nums text-indigo-600">
+                                {row.earned}/{row.maxPoints}
+                              </span>
+                            </div>
+                            <div className="mt-1 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+                              <div
+                                className="h-full rounded-full bg-indigo-500 transition-all"
+                                style={{ width: `${row.maxPoints ? Math.min(100, (row.earned / row.maxPoints) * 100) : 0}%` }}
+                              />
+                            </div>
+                            <p className="mt-1 text-xs text-slate-500 leading-snug line-clamp-2" title={row.evidence}>
+                              {row.evidence}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
 
                   <div className="space-y-6">
                     <div className="grid grid-cols-2 gap-4">
@@ -347,9 +400,16 @@ export default function App() {
                           <ExternalLink className="w-4 h-4" />
                         </a>
                       ) : (
-                        <div className="flex-1 py-4 bg-slate-100 text-slate-400 rounded-2xl font-bold flex flex-col items-center justify-center text-xs">
-                          <span className="font-bold text-sm mb-1">Drive Sync Skipped</span>
-                          {result.driveStatus === 'missing_credentials' ? 'Check Secrets' : result.driveStatus === 'missing_folder_id' ? 'Check Folder ID' : 'Error during upload'}
+                        <div className="flex-1 py-4 px-3 bg-slate-100 text-slate-500 rounded-2xl font-bold flex flex-col items-center justify-center gap-2 text-xs text-center">
+                          <span className="font-bold text-sm text-slate-600">Drive upload did not complete</span>
+                          <p className="text-[11px] font-normal leading-snug text-slate-500">
+                            {result.driveMessage ??
+                              (result.driveStatus === 'missing_credentials'
+                                ? 'Add Google service account env vars.'
+                                : result.driveStatus === 'missing_folder_id'
+                                  ? 'Set GOOGLE_DRIVE_FOLDER_ID.'
+                                  : 'Error during upload')}
+                          </p>
                         </div>
                       )}
                       <button

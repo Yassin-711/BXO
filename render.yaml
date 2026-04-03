@@ -1,0 +1,11 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# After first deploy, set environment variables in the Render dashboard
+# (MY_GEMINI_API_KEY required; Google vars optional for Drive/Sheets).
+
+services:
+  - type: web
+    name: bxo
+    runtime: node
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
