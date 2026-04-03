@@ -202,6 +202,26 @@ async function getFolderDriveContext(
   }
 }
 
+type FolderCtxResult =
+  | { ok: true; driveId: string; name: string }
+  | { ok: false; reason: string };
+
+const FOLDER_DRIVE_CTX_TTL_MS = 10 * 60 * 1000;
+const folderDriveCtxCache = new Map<string, { expiry: number; result: FolderCtxResult }>();
+
+async function getFolderDriveContextCached(jwt: JWT, folderId: string): Promise<FolderCtxResult> {
+  const now = Date.now();
+  const cached = folderDriveCtxCache.get(folderId);
+  if (cached && cached.expiry > now) {
+    return cached.result;
+  }
+  const result = await getFolderDriveContext(jwt, folderId);
+  if (result.ok) {
+    folderDriveCtxCache.set(folderId, { expiry: now + FOLDER_DRIVE_CTX_TTL_MS, result });
+  }
+  return result;
+}
+
 async function driveMultipartUploadPdf(
   jwt: JWT,
   folderId: string,
@@ -477,8 +497,11 @@ async function startServer() {
         let driveLink = "Not Configured";
         let driveStatus = "skipped";
         let driveMessage: string | undefined;
+        let sheetsSynced = false;
+        let sheetStatus = "skipped";
 
         const jwt = await createGoogleServiceAccountJwt();
+        const sheetRange = "'Table 1'!A:F";
 
         if (!jwt) {
           console.warn("Skipping Google Drive/Sheets: Missing Service Account credentials.");
@@ -489,7 +512,7 @@ async function startServer() {
         } else {
           console.log(`Uploading to Google Drive folder: ${DRIVE_FOLDER_ID}...`);
           try {
-            const folderCtx = await getFolderDriveContext(jwt, DRIVE_FOLDER_ID);
+            const folderCtx = await getFolderDriveContextCached(jwt, DRIVE_FOLDER_ID);
             if (folderCtx.ok === false) {
               driveStatus = "requires_shared_drive";
               driveMessage = folderCtx.reason;
@@ -507,19 +530,67 @@ async function startServer() {
               );
               console.log(`Upload success. File ID: ${fileId}`);
 
-              try {
-                await driveSetAnyoneReader(jwt, fileId);
-              } catch (permErr: unknown) {
-                const m = permErr instanceof Error ? permErr.message : String(permErr);
-                console.warn(
-                  "Could not set link-sharing (anyone) permission; file may still be open to Shared Drive members:",
-                  m
-                );
-              }
-
               driveLink = `https://drive.google.com/file/d/${fileId}/view`;
               driveStatus = "success";
               console.log(`Drive link: ${driveLink}`);
+
+              const sheetRow = [
+                analysis.name,
+                analysis.majors,
+                analysis.languages,
+                analysis.skills,
+                analysis.vitaeScore,
+                driveLink,
+              ];
+
+              if (SHEET_ID) {
+                console.log("Parallel: Drive link permission + Google Sheets append...");
+                const [permOutcome, sheetOutcome] = await Promise.allSettled([
+                  driveSetAnyoneReader(jwt, fileId),
+                  sheetsAppendRow(jwt, SHEET_ID, sheetRange, sheetRow),
+                ]);
+
+                if (permOutcome.status === "rejected") {
+                  const m =
+                    permOutcome.reason instanceof Error
+                      ? permOutcome.reason.message
+                      : String(permOutcome.reason);
+                  console.warn(
+                    "Could not set link-sharing (anyone) permission; file may still be open to Shared Drive members:",
+                    m
+                  );
+                }
+
+                if (sheetOutcome.status === "fulfilled") {
+                  sheetStatus = "success";
+                  sheetsSynced = true;
+                  console.log("Sheets sync successful");
+                } else {
+                  sheetStatus = "error";
+                  sheetsSynced = true;
+                  const se = sheetOutcome.reason as {
+                    response?: { status?: number };
+                    status?: number;
+                    message?: string;
+                  };
+                  console.error("Google Sheets Error Details:");
+                  console.error("Status:", se.response?.status ?? se.status);
+                  console.error("Message:", se?.message ?? sheetOutcome.reason);
+                  if (se.response?.status === 400 || se.status === 400) {
+                    console.error(`Root Cause: 400 Bad Request. Likely 'Unable to parse range: ${sheetRange}'.`);
+                  }
+                }
+              } else {
+                try {
+                  await driveSetAnyoneReader(jwt, fileId);
+                } catch (permErr: unknown) {
+                  const m = permErr instanceof Error ? permErr.message : String(permErr);
+                  console.warn(
+                    "Could not set link-sharing (anyone) permission; file may still be open to Shared Drive members:",
+                    m
+                  );
+                }
+              }
             }
           } catch (driveError: any) {
             driveStatus = "error";
@@ -537,10 +608,8 @@ async function startServer() {
           }
         }
 
-        // 4. Save to Google Sheets
-        let sheetStatus = "skipped";
-        if (jwt && SHEET_ID) {
-          const sheetRange = "'Table 1'!A:F"; // sheet name with quotes
+        // 4. Save to Google Sheets (if not already done in parallel with Drive permission)
+        if (!sheetsSynced && jwt && SHEET_ID) {
           console.log(`Saving to Google Sheets (ID: ${SHEET_ID}, Range: ${sheetRange})...`);
           try {
             await sheetsAppendRow(jwt, SHEET_ID, sheetRange, [
@@ -563,9 +632,9 @@ async function startServer() {
               console.error(`Root Cause: 400 Bad Request. Likely 'Unable to parse range: ${sheetRange}'.`);
             }
           }
-        } else if (jwt && !SHEET_ID) {
+        } else if (!sheetsSynced && jwt && !SHEET_ID) {
           sheetStatus = "missing_sheet_id";
-        } else {
+        } else if (!sheetsSynced && !jwt) {
           sheetStatus = "missing_credentials";
         }
 
