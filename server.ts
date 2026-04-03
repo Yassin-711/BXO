@@ -3,8 +3,7 @@ import express from "express";
 import path from "path";
 import multer from "multer";
 import cors from "cors";
-import { Readable } from "stream";
-import type { drive_v3 } from "googleapis";
+import type { JWT } from "google-auth-library";
 
 /** Load pdf-parse only when parsing — keeps production baseline RAM low (Render 512MB). */
 async function pdf(data: Buffer) {
@@ -107,11 +106,14 @@ function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<strin
   };
 }
 
-type GoogleApisModule = typeof import("googleapis");
+const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/drive",
+  "https://www.googleapis.com/auth/spreadsheets",
+] as const;
 
-function createGoogleServiceAccountAuth(
-  google: GoogleApisModule["google"]
-): InstanceType<GoogleApisModule["google"]["auth"]["JWT"]> | null {
+/** Uses `google-auth-library` only (no `googleapis` mega-bundle) to keep heap small on Render. */
+async function createGoogleServiceAccountJwt(): Promise<JWT | null> {
+  const { JWT } = await import("google-auth-library");
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   let key = process.env.GOOGLE_PRIVATE_KEY;
 
@@ -143,16 +145,13 @@ function createGoogleServiceAccountAuth(
 
   try {
     console.log("Initializing Google Auth JWT for:", email);
-    const auth = new google.auth.JWT({
+    const jwt = new JWT({
       email,
       key,
-      scopes: [
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets",
-      ],
+      scopes: [...GOOGLE_SCOPES],
     });
     console.log("Google Auth JWT initialized successfully");
-    return auth;
+    return jwt;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("Error creating Google Auth JWT:", message);
@@ -160,17 +159,23 @@ function createGoogleServiceAccountAuth(
   }
 }
 
+type DriveFileMeta = {
+  id?: string;
+  name?: string;
+  mimeType?: string;
+  driveId?: string;
+};
+
 /** Service accounts have no personal Drive quota; uploads must target a folder on a Shared Drive (driveId set). */
 async function getFolderDriveContext(
-  drive: drive_v3.Drive,
+  jwt: JWT,
   folderId: string
 ): Promise<{ ok: true; driveId: string; name: string } | { ok: false; reason: string }> {
   try {
-    const { data } = await drive.files.get({
-      fileId: folderId,
-      supportsAllDrives: true,
-      fields: "id,name,mimeType,driveId",
-    });
+    const url =
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}` +
+      `?supportsAllDrives=true&fields=id%2Cname%2CmimeType%2CdriveId`;
+    const { data } = await jwt.request<DriveFileMeta>({ url, method: "GET" });
     if (data.mimeType !== "application/vnd.google-apps.folder") {
       return { ok: false, reason: "GOOGLE_DRIVE_FOLDER_ID is not a folder." };
     }
@@ -182,9 +187,10 @@ async function getFolderDriveContext(
       };
     }
     return { ok: true, driveId: data.driveId, name: data.name ?? folderId };
-  } catch (e: any) {
-    const msg = e?.message ?? String(e);
-    const code = e?.code ?? e?.status;
+  } catch (e: unknown) {
+    const err = e as { message?: string; response?: { status?: number } };
+    const msg = err?.message ?? String(e);
+    const code = err?.response?.status;
     if (code === 404) {
       return {
         ok: false,
@@ -194,6 +200,72 @@ async function getFolderDriveContext(
     }
     return { ok: false, reason: `Could not verify folder: ${msg}` };
   }
+}
+
+async function driveMultipartUploadPdf(
+  jwt: JWT,
+  folderId: string,
+  fileName: string,
+  pdfBuffer: Buffer
+): Promise<string> {
+  const boundary = "-------bxoPdfUpload" + Date.now();
+  const delimiter = "\r\n--" + boundary + "\r\n";
+  const closeDelim = "\r\n--" + boundary + "--";
+  const metadata = { name: fileName, parents: [folderId] };
+  const body = Buffer.concat([
+    Buffer.from(
+      delimiter +
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n" +
+        JSON.stringify(metadata)
+    ),
+    Buffer.from(delimiter + "Content-Type: application/pdf\r\n\r\n"),
+    pdfBuffer,
+    Buffer.from(closeDelim),
+  ]);
+
+  const { data } = await jwt.request<{ id?: string }>({
+    url: "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true",
+    method: "POST",
+    headers: {
+      "Content-Type": `multipart/related; boundary=${boundary}`,
+    },
+    body,
+    responseType: "json",
+  });
+
+  if (!data?.id) {
+    throw new Error("Drive upload returned no file id");
+  }
+  return data.id;
+}
+
+async function driveSetAnyoneReader(jwt: JWT, fileId: string): Promise<void> {
+  await jwt.request({
+    url:
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/permissions` +
+      "?supportsAllDrives=true",
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: { role: "reader", type: "anyone" },
+  });
+}
+
+async function sheetsAppendRow(
+  jwt: JWT,
+  spreadsheetId: string,
+  rangeA1: string,
+  row: (string | number)[]
+): Promise<void> {
+  const enc = encodeURIComponent(rangeA1);
+  const url =
+    `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${enc}:append` +
+    "?valueInputOption=USER_ENTERED";
+  await jwt.request({
+    url,
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    data: { values: [row] },
+  });
 }
 
 // --- Configuration ---
@@ -406,12 +478,9 @@ async function startServer() {
         let driveStatus = "skipped";
         let driveMessage: string | undefined;
 
-        const { google } = await import("googleapis");
-        const auth = createGoogleServiceAccountAuth(google);
-        const drive = google.drive({ version: "v3", auth: auth ?? undefined });
-        const sheets = google.sheets({ version: "v4", auth: auth ?? undefined });
-        
-        if (!auth) {
+        const jwt = await createGoogleServiceAccountJwt();
+
+        if (!jwt) {
           console.warn("Skipping Google Drive/Sheets: Missing Service Account credentials.");
           driveStatus = "missing_credentials";
         } else if (!DRIVE_FOLDER_ID) {
@@ -420,7 +489,7 @@ async function startServer() {
         } else {
           console.log(`Uploading to Google Drive folder: ${DRIVE_FOLDER_ID}...`);
           try {
-            const folderCtx = await getFolderDriveContext(drive, DRIVE_FOLDER_ID);
+            const folderCtx = await getFolderDriveContext(jwt, DRIVE_FOLDER_ID);
             if (folderCtx.ok === false) {
               driveStatus = "requires_shared_drive";
               driveMessage = folderCtx.reason;
@@ -430,39 +499,21 @@ async function startServer() {
                 `Folder OK on Shared Drive "${folderCtx.name}" (driveId=${folderCtx.driveId}). Uploading PDF...`
               );
 
-              const pdfStream = Readable.from(req.file.buffer);
-              const createRes = await drive.files.create({
-                requestBody: {
-                  name: req.file.originalname,
-                  parents: [DRIVE_FOLDER_ID],
-                },
-                media: {
-                  mimeType: "application/pdf",
-                  body: pdfStream,
-                },
-                supportsAllDrives: true,
-                fields: "id,name",
-              });
-
-              const fileId = createRes.data.id;
-              if (!fileId) {
-                throw new Error("Drive upload returned no file id");
-              }
+              const fileId = await driveMultipartUploadPdf(
+                jwt,
+                DRIVE_FOLDER_ID,
+                req.file.originalname,
+                req.file.buffer
+              );
               console.log(`Upload success. File ID: ${fileId}`);
 
               try {
-                await drive.permissions.create({
-                  fileId,
-                  supportsAllDrives: true,
-                  requestBody: {
-                    role: "reader",
-                    type: "anyone",
-                  },
-                });
-              } catch (permErr: any) {
+                await driveSetAnyoneReader(jwt, fileId);
+              } catch (permErr: unknown) {
+                const m = permErr instanceof Error ? permErr.message : String(permErr);
                 console.warn(
                   "Could not set link-sharing (anyone) permission; file may still be open to Shared Drive members:",
-                  permErr?.message ?? permErr
+                  m
                 );
               }
 
@@ -488,38 +539,31 @@ async function startServer() {
 
         // 4. Save to Google Sheets
         let sheetStatus = "skipped";
-        if (auth && SHEET_ID) {
-          const sheetRange = "'Table 1'!A:F"; // FIX 2: Use correct sheet name with quotes
+        if (jwt && SHEET_ID) {
+          const sheetRange = "'Table 1'!A:F"; // sheet name with quotes
           console.log(`Saving to Google Sheets (ID: ${SHEET_ID}, Range: ${sheetRange})...`);
           try {
-            await sheets.spreadsheets.values.append({
-              spreadsheetId: SHEET_ID,
-              range: sheetRange,
-              valueInputOption: 'USER_ENTERED',
-              requestBody: {
-                // FIX 3: Ensure correct append format
-                values: [[
-                  analysis.name,
-                  analysis.majors,
-                  analysis.languages,
-                  analysis.skills,
-                  analysis.vitaeScore,
-                  driveLink
-                ]]
-              }
-            });
+            await sheetsAppendRow(jwt, SHEET_ID, sheetRange, [
+              analysis.name,
+              analysis.majors,
+              analysis.languages,
+              analysis.skills,
+              analysis.vitaeScore,
+              driveLink,
+            ]);
             sheetStatus = "success";
             console.log("Sheets sync successful");
-          } catch (sheetError: any) {
+          } catch (sheetError: unknown) {
             sheetStatus = "error";
+            const se = sheetError as { status?: number; code?: number; message?: string };
             console.error("Google Sheets Error Details:");
-            console.error("Status:", sheetError.status || sheetError.code);
-            console.error("Message:", sheetError.message);
-            if (sheetError.status === 400) {
+            console.error("Status:", se.status || se.code);
+            console.error("Message:", se.message);
+            if (se.status === 400) {
               console.error(`Root Cause: 400 Bad Request. Likely 'Unable to parse range: ${sheetRange}'.`);
             }
           }
-        } else if (auth && !SHEET_ID) {
+        } else if (jwt && !SHEET_ID) {
           sheetStatus = "missing_sheet_id";
         } else {
           sheetStatus = "missing_credentials";
