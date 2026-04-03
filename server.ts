@@ -17,7 +17,7 @@ import { google } from "googleapis";
 import { Readable } from "stream";
 
 // --- Configuration ---
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const upload = multer({ storage: multer.memoryStorage() });
 
 process.on('uncaughtException', (err) => {
