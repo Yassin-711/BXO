@@ -1,20 +1,18 @@
 import 'dotenv/config';
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import multer from "multer";
 import cors from "cors";
-import { PDFParse } from 'pdf-parse';
+import { Readable } from "stream";
+import type { drive_v3 } from "googleapis";
 
+/** Load pdf-parse only when parsing — keeps production baseline RAM low (Render 512MB). */
 async function pdf(data: Buffer) {
+  const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data });
   const result = await parser.getText();
   return { text: result.text };
 }
-
-import { GoogleGenAI, Type } from "@google/genai";
-import { google } from "googleapis";
-import { Readable } from "stream";
 
 const VITAE_RUBRIC = [
   { id: "education", max: 20, label: "Education & qualifications" },
@@ -109,9 +107,62 @@ function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<strin
   };
 }
 
+type GoogleApisModule = typeof import("googleapis");
+
+function createGoogleServiceAccountAuth(
+  google: GoogleApisModule["google"]
+): InstanceType<GoogleApisModule["google"]["auth"]["JWT"]> | null {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  let key = process.env.GOOGLE_PRIVATE_KEY;
+
+  if (!email) {
+    console.warn("GOOGLE_SERVICE_ACCOUNT_EMAIL is missing.");
+    return null;
+  }
+  if (!key) {
+    console.warn("GOOGLE_PRIVATE_KEY is missing.");
+    return null;
+  }
+
+  key = key.trim().replace(/^['"]|['"]$/g, "");
+  key = key.replace(/\\n/g, "\n");
+
+  if (!key.includes("\n") && key.includes("-----BEGIN PRIVATE KEY-----")) {
+    console.log("Detected single-line private key, attempting to reformat...");
+    const header = "-----BEGIN PRIVATE KEY-----";
+    const footer = "-----END PRIVATE KEY-----";
+    let content = key.replace(header, "").replace(footer, "").trim();
+    content = content.replace(/\s+/g, "");
+    const wrappedContent = content.match(/.{1,64}/g)?.join("\n");
+    key = `${header}\n${wrappedContent}\n${footer}\n`;
+  }
+
+  if (!key.includes("-----BEGIN PRIVATE KEY-----")) {
+    console.error("GOOGLE_PRIVATE_KEY is missing the 'BEGIN PRIVATE KEY' header.");
+  }
+
+  try {
+    console.log("Initializing Google Auth JWT for:", email);
+    const auth = new google.auth.JWT({
+      email,
+      key,
+      scopes: [
+        "https://www.googleapis.com/auth/drive",
+        "https://www.googleapis.com/auth/spreadsheets",
+      ],
+    });
+    console.log("Google Auth JWT initialized successfully");
+    return auth;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("Error creating Google Auth JWT:", message);
+    return null;
+  }
+}
+
 /** Service accounts have no personal Drive quota; uploads must target a folder on a Shared Drive (driveId set). */
 async function getFolderDriveContext(
-  drive: ReturnType<typeof google.drive>,
+  drive: drive_v3.Drive,
   folderId: string
 ): Promise<{ ok: true; driveId: string; name: string } | { ok: false; reason: string }> {
   try {
@@ -169,62 +220,7 @@ async function startServer() {
       next();
     });
 
-    // --- Google APIs Setup ---
-    const getGoogleAuth = () => {
-      const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-      let key = process.env.GOOGLE_PRIVATE_KEY;
-
-      if (!email) {
-        console.warn("GOOGLE_SERVICE_ACCOUNT_EMAIL is missing.");
-        return null;
-      }
-      if (!key) {
-        console.warn("GOOGLE_PRIVATE_KEY is missing.");
-        return null;
-      }
-
-      // Robust key parsing
-      // 1. Remove surrounding quotes if the user pasted them
-      key = key.trim().replace(/^['"]|['"]$/g, '');
-      
-      // 2. Handle literal \n characters (common when pasting from JSON)
-      key = key.replace(/\\n/g, '\n');
-
-      // 3. If the key is a single line but contains the headers, it might be missing newlines
-      // This happens if the user pastes the key into a single-line input field
-      if (!key.includes('\n') && key.includes('-----BEGIN PRIVATE KEY-----')) {
-        console.log("Detected single-line private key, attempting to reformat...");
-        const header = '-----BEGIN PRIVATE KEY-----';
-        const footer = '-----END PRIVATE KEY-----';
-        let content = key.replace(header, '').replace(footer, '').trim();
-        // Remove any spaces and re-wrap at 64 characters (standard PEM)
-        content = content.replace(/\s+/g, '');
-        const wrappedContent = content.match(/.{1,64}/g)?.join('\n');
-        key = `${header}\n${wrappedContent}\n${footer}\n`;
-      }
-
-      // 4. Ensure it has the correct headers
-      if (!key.includes('-----BEGIN PRIVATE KEY-----')) {
-        console.error("GOOGLE_PRIVATE_KEY is missing the 'BEGIN PRIVATE KEY' header.");
-      }
-
-      try {
-        console.log("Initializing Google Auth JWT for:", email);
-        const auth = new google.auth.JWT({
-          email: email,
-          key: key,
-          scopes: ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
-        });
-        console.log("Google Auth JWT initialized successfully");
-        return auth;
-      } catch (err: any) {
-        console.error("Error creating Google Auth JWT:", err.message);
-        return null;
-      }
-    };
-
-    const drive = google.drive({ version: 'v3', auth: getGoogleAuth() || undefined });
-    const sheets = google.sheets({ version: 'v4', auth: getGoogleAuth() || undefined });
+    // Google APIs are lazy-loaded inside POST /api/analyze only (saves ~100MB+ at idle on Render).
 
     // Helper to extract ID from URL if user provided a full URL
     const extractId = (input: string | undefined) => {
@@ -299,13 +295,14 @@ async function startServer() {
           return res.status(400).json({ error: "The PDF appears to be empty or unreadable (e.g., it might be a scanned image without OCR)." });
         }
 
-        // 2. Analyze with Gemini (with retry logic)
+        // 2. Analyze with Gemini (with retry logic) — lazy-load SDK to save RAM until after PDF parse
         console.log("Calling Gemini AI...");
         const apiKey = process.env.MY_GEMINI_API_KEY;
         if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
           throw new Error("MY_GEMINI_API_KEY is not configured or is using the placeholder value. Please set a valid API key in the Secrets panel.");
         }
 
+        const { GoogleGenAI, Type } = await import("@google/genai");
         const genAI = new GoogleGenAI({ apiKey });
         const prompt = buildCvAnalysisPrompt(cvText);
 
@@ -408,7 +405,11 @@ async function startServer() {
         let driveLink = "Not Configured";
         let driveStatus = "skipped";
         let driveMessage: string | undefined;
-        const auth = getGoogleAuth();
+
+        const { google } = await import("googleapis");
+        const auth = createGoogleServiceAccountAuth(google);
+        const drive = google.drive({ version: "v3", auth: auth ?? undefined });
+        const sheets = google.sheets({ version: "v4", auth: auth ?? undefined });
         
         if (!auth) {
           console.warn("Skipping Google Drive/Sheets: Missing Service Account credentials.");
@@ -540,9 +541,10 @@ async function startServer() {
       }
     });
 
-    // --- Vite Middleware ---
+    // --- Vite Middleware (dev only — dynamic import keeps Vite out of production memory) ---
     if (process.env.NODE_ENV !== "production") {
       console.log("Starting Vite in middleware mode...");
+      const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
