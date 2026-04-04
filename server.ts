@@ -106,6 +106,106 @@ function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<strin
   };
 }
 
+const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
+/** Qwen3-based “Plus” on OpenRouter; override with OPENROUTER_MODEL. */
+const DEFAULT_OPENROUTER_MODEL = "qwen/qwen-plus-2025-07-28";
+
+function stripJsonFromAssistantContent(content: string): string {
+  let s = content.trim();
+  const fenced = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```$/i.exec(s);
+  if (fenced) return fenced[1].trim();
+  return s;
+}
+
+async function analyzeCvTextWithOpenRouter(cvText: string): Promise<Record<string, unknown>> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey?.trim() || apiKey === "OPENROUTER_API_KEY") {
+    throw new Error(
+      "OPENROUTER_API_KEY is not configured. Set it in your environment (e.g. Render → Environment)."
+    );
+  }
+
+  const model = process.env.OPENROUTER_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL;
+  const userPrompt = buildCvAnalysisPrompt(cvText);
+
+  const payload: Record<string, unknown> = {
+    model,
+    messages: [
+      {
+        role: "system",
+        content:
+          "You must respond with a single JSON object only—no markdown code fences, no commentary before or after. Follow the user's schema exactly.",
+      },
+      { role: "user", content: userPrompt },
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0.1,
+    top_p: 0.3,
+  };
+
+  const maxTok = process.env.OPENROUTER_MAX_TOKENS?.trim();
+  if (maxTok) {
+    const n = parseInt(maxTok, 10);
+    if (Number.isFinite(n) && n > 0) payload.max_tokens = n;
+  }
+
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey.trim()}`,
+    "Content-Type": "application/json",
+  };
+  const referer = process.env.OPENROUTER_HTTP_REFERER?.trim();
+  if (referer) headers["HTTP-Referer"] = referer;
+  const appTitle = process.env.OPENROUTER_APP_NAME?.trim();
+  if (appTitle) headers["X-Title"] = appTitle;
+
+  const res = await fetch(OPENROUTER_CHAT_URL, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+
+  const rawBody = await res.text();
+  if (!res.ok) {
+    throw new Error(`OpenRouter HTTP ${res.status}: ${rawBody.slice(0, 800)}`);
+  }
+
+  let data: {
+    choices?: Array<{ message?: { content?: string | null } }>;
+    error?: { message?: string };
+  };
+  try {
+    data = JSON.parse(rawBody) as typeof data;
+  } catch {
+    throw new Error(`OpenRouter returned non-JSON: ${rawBody.slice(0, 200)}`);
+  }
+
+  if (data.error?.message) {
+    throw new Error(`OpenRouter error: ${data.error.message}`);
+  }
+
+  const content = data.choices?.[0]?.message?.content;
+  if (content == null || typeof content !== "string") {
+    throw new Error("OpenRouter returned empty choices[0].message.content");
+  }
+
+  const jsonStr = stripJsonFromAssistantContent(content);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (e) {
+    const hint = e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `Failed to parse model JSON (${hint}). Snippet: ${jsonStr.slice(0, 400)}`
+    );
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Model JSON must be a single object");
+  }
+
+  return parsed as Record<string, unknown>;
+}
+
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/drive",
   "https://www.googleapis.com/auth/spreadsheets",
@@ -332,9 +432,6 @@ async function startServer() {
       console.log(`Extracted Sheet ID: ${SHEET_ID}`);
     }
 
-    // --- Gemini AI Setup ---
-    // (Initialized inside the request handler to ensure latest environment variables)
-
     // --- API Routes ---
 
     app.get("/api/health", (req, res) => {
@@ -343,8 +440,11 @@ async function startServer() {
         status: "ok", 
         time: new Date().toISOString(),
         env: {
-          hasGeminiKey: !!process.env.MY_GEMINI_API_KEY && process.env.MY_GEMINI_API_KEY !== "MY_GEMINI_API_KEY",
-          isPlaceholderKey: process.env.MY_GEMINI_API_KEY === "MY_GEMINI_API_KEY",
+          hasOpenRouterKey:
+            !!process.env.OPENROUTER_API_KEY &&
+            process.env.OPENROUTER_API_KEY !== "OPENROUTER_API_KEY",
+          isPlaceholderOpenRouterKey: process.env.OPENROUTER_API_KEY === "OPENROUTER_API_KEY",
+          openRouterModel: process.env.OPENROUTER_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL,
           hasGoogleEmail: !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
           hasGoogleKey: !!process.env.GOOGLE_PRIVATE_KEY,
           googleKeyFormatOk: !!process.env.GOOGLE_PRIVATE_KEY && (process.env.GOOGLE_PRIVATE_KEY.includes('BEGIN PRIVATE KEY') || process.env.GOOGLE_PRIVATE_KEY.includes('\\n')),
@@ -387,103 +487,36 @@ async function startServer() {
           return res.status(400).json({ error: "The PDF appears to be empty or unreadable (e.g., it might be a scanned image without OCR)." });
         }
 
-        // 2. Analyze with Gemini (with retry logic) — lazy-load SDK to save RAM until after PDF parse
-        console.log("Calling Gemini AI...");
-        const apiKey = process.env.MY_GEMINI_API_KEY;
-        if (!apiKey || apiKey === "MY_GEMINI_API_KEY") {
-          throw new Error("MY_GEMINI_API_KEY is not configured or is using the placeholder value. Please set a valid API key in the Secrets panel.");
-        }
-
-        const { GoogleGenAI, Type } = await import("@google/genai");
-        const genAI = new GoogleGenAI({ apiKey });
-        const prompt = buildCvAnalysisPrompt(cvText);
-
+        // 2. Analyze with OpenRouter (default: Qwen Plus) — fetch only, no Gemini SDK
+        console.log("Calling OpenRouter...");
         let analysis: any = null;
         let retries = 3;
         let lastError: any = null;
 
         while (retries > 0) {
           try {
-            const response = await genAI.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: prompt,
-              config: {
-                temperature: 0.1,
-                topP: 0.3,
-                seed: 42,
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    name: { type: Type.STRING, description: "Full name of the candidate" },
-                    majors: { type: Type.STRING, description: "Fields of study or majors" },
-                    languages: { type: Type.STRING, description: "Languages spoken with levels (e.g. English - Fluent)" },
-                    skills: { type: Type.STRING, description: "Comma separated list of technical and soft skills" },
-                    vitaeScore: {
-                      type: Type.NUMBER,
-                      description: "Must equal the sum of breakdown[].earned; integer 0–100",
-                    },
-                    reasoning: {
-                      type: Type.STRING,
-                      description: "2–3 sentences; must align with the rubric breakdown",
-                    },
-                    breakdown: {
-                      type: Type.ARRAY,
-                      description:
-                        "Exactly 5 rows: education, experience, skills, languages, certsProjects in that order",
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          criterionId: {
-                            type: Type.STRING,
-                            description:
-                              "One of: education, experience, skills, languages, certsProjects",
-                          },
-                          maxPoints: {
-                            type: Type.NUMBER,
-                            description: "Category max from rubric (20, 35, 25, 10, or 10)",
-                          },
-                          earned: {
-                            type: Type.NUMBER,
-                            description: "Integer points earned for this category",
-                          },
-                          evidence: {
-                            type: Type.STRING,
-                            description: "Short quote or paraphrase from CV supporting earned points",
-                          },
-                        },
-                        required: ["criterionId", "maxPoints", "earned", "evidence"],
-                      },
-                    },
-                  },
-                  required: [
-                    "name",
-                    "majors",
-                    "languages",
-                    "skills",
-                    "vitaeScore",
-                    "reasoning",
-                    "breakdown",
-                  ],
-                },
-              },
-            });
-
-            const rawText = response.text || "{}";
-            console.log("Raw Gemini Text:", rawText);
-            analysis = normalizeVitaeAnalysis(JSON.parse(rawText) as Record<string, unknown>);
-            console.log("Gemini analysis successful");
+            const raw = await analyzeCvTextWithOpenRouter(cvText);
+            console.log("Raw OpenRouter analysis:", JSON.stringify(raw).slice(0, 2000));
+            analysis = normalizeVitaeAnalysis(raw);
+            console.log("OpenRouter analysis successful");
             break;
           } catch (err: any) {
             lastError = err;
-            const isRetryable = err.message?.includes("503") || err.message?.includes("UNAVAILABLE") || err.message?.includes("high demand");
-            
+            const msg = String(err?.message ?? err);
+            const isRetryable =
+              msg.includes("429") ||
+              msg.includes("502") ||
+              msg.includes("503") ||
+              msg.includes("529") ||
+              msg.includes("UNAVAILABLE") ||
+              /rate limit|overloaded|high demand|temporarily/i.test(msg);
+
             if (isRetryable && retries > 1) {
-              console.warn(`Gemini API busy (503). Retrying in 2s... (${retries - 1} left)`);
-              await new Promise(r => setTimeout(r, 2000));
+              console.warn(`OpenRouter busy or rate-limited. Retrying in 2s... (${retries - 1} left)`);
+              await new Promise((r) => setTimeout(r, 2000));
               retries--;
             } else {
-              console.error("Gemini Analysis Error:", err.message);
+              console.error("OpenRouter analysis error:", msg);
               throw err;
             }
           }

@@ -1,6 +1,6 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
 # After first deploy, set environment variables in the Render dashboard
-# (MY_GEMINI_API_KEY required; Google vars optional for Drive/Sheets).
+# (OPENROUTER_API_KEY required; Google vars optional for Drive/Sheets).
 
 services:
   - type: web

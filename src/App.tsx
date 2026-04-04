@@ -87,8 +87,12 @@ export default function App() {
         const data = await response.json();
         if (!response.ok) {
           let errorMessage = data.error || `Server error: ${response.status}`;
-          if (errorMessage.includes("API key not valid") || errorMessage.includes("MY_GEMINI_API_KEY")) {
-            errorMessage = "Gemini API Key is invalid or missing. Please set a valid MY_GEMINI_API_KEY in the Secrets panel (Settings > Secrets).";
+          if (
+            errorMessage.includes("OPENROUTER_API_KEY") ||
+            errorMessage.toLowerCase().includes("openrouter")
+          ) {
+            errorMessage =
+              "OpenRouter API key is missing or invalid. Set OPENROUTER_API_KEY in your environment (e.g. Render → Environment).";
           }
           throw new Error(errorMessage);
         }
@@ -168,7 +172,7 @@ export default function App() {
 
             <div className="space-y-4">
               {[
-                { icon: Cpu, text: "AI-Powered Extraction", sub: "Powered by Gemini 3 Flash" },
+                { icon: Cpu, text: "AI-Powered Extraction", sub: "OpenRouter · Qwen Plus" },
                 { icon: Award, text: "BXO Scoring System", sub: "Proprietary ranking algorithm" },
                 { icon: CheckCircle2, text: "Google Workspace Sync", sub: "Drive & Sheets integration" }
               ].map((item, i) => (
