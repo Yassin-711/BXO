@@ -64,7 +64,10 @@ function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<strin
     for (const raw of rawBreakdown) {
       if (!raw || typeof raw !== "object") continue;
       const row = raw as Record<string, unknown>;
-      const criterionId = String(row.criterionId ?? "").trim();
+      // OpenRouter / Qwen often returns "id" instead of "criterionId"
+      const criterionId = String(
+        row.criterionId ?? row.id ?? row.category ?? ""
+      ).trim();
       const maxAllowed = rubricMax.get(criterionId);
       if (maxAllowed === undefined) continue;
 
