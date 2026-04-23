@@ -178,19 +178,40 @@ const ROLE_SKILL_MAP: Array<{ role: string; keywords: string[] }> = [
 const CORE_SKILLS = Array.from(
   new Set(
     ROLE_SKILL_MAP.flatMap((r) => r.keywords).concat([
+      "node.js",
+      "nodejs",
       "git",
       "c++",
       "c#",
+      "dotnet",
+      ".net",
       "php",
       "go",
+      "golang",
       "machine learning",
       "deep learning",
       "nlp",
       "tensorflow",
       "pytorch",
       "scikit-learn",
+      "scikitlearn",
       "figma",
       "firebase",
+      "typescript",
+      "javascript",
+      "nextjs",
+      "reactjs",
+      "vue",
+      "angular",
+      "mysql",
+      "postgresql",
+      "postgre sql",
+      "mongodb",
+      "redis",
+      "graphql",
+      "rest api",
+      "linux",
+      "bash",
     ])
   )
 );
@@ -212,6 +233,79 @@ function normalizeWhitespace(input: string): string {
   return input.replace(/\s+/g, " ").trim();
 }
 
+function normalizeToken(input: string): string {
+  return normalizeWhitespace(input.toLowerCase().replace(/[^\p{L}\p{N}+#.\s/-]/gu, " "));
+}
+
+const SKILL_ALIASES: Record<string, string> = {
+  js: "javascript",
+  ts: "typescript",
+  "node js": "node",
+  "node.js": "node",
+  nodejs: "node",
+  "react js": "react",
+  reactjs: "react",
+  "next js": "next.js",
+  nextjs: "next.js",
+  "tailwind css": "tailwind",
+  "powerbi": "power bi",
+  "postgre sql": "postgres",
+  postgresql: "postgres",
+  "scikit learn": "scikit-learn",
+  scikitlearn: "scikit-learn",
+  "ml": "machine learning",
+  "dl": "deep learning",
+  "rn": "react native",
+  "google cloud": "gcp",
+  "amazon web services": "aws",
+  "c sharp": "c#",
+  "c plus plus": "c++",
+  ".net": "dotnet",
+  "restful api": "api",
+  "rest apis": "api",
+};
+
+function extractWordSet(text: string): Set<string> {
+  const words = text.match(/[\p{L}\p{N}+#.]+/gu) ?? [];
+  return new Set(words.map((w) => normalizeToken(w)).filter(Boolean));
+}
+
+function editDistanceAtMost(a: string, b: string, maxDistance: number): number {
+  if (Math.abs(a.length - b.length) > maxDistance) return maxDistance + 1;
+  if (a === b) return 0;
+
+  const prev = new Array(b.length + 1);
+  const curr = new Array(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    let rowMin = curr[0];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1,
+        curr[j - 1] + 1,
+        prev[j - 1] + cost
+      );
+      if (curr[j] < rowMin) rowMin = curr[j];
+    }
+    if (rowMin > maxDistance) return maxDistance + 1;
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j];
+  }
+  return prev[b.length];
+}
+
+function isApproximateWordMatch(skillToken: string, words: Set<string>): boolean {
+  if (skillToken.length < 4) return false;
+  const maxDistance = skillToken.length <= 6 ? 1 : 2;
+  for (const w of words) {
+    if (Math.abs(w.length - skillToken.length) > maxDistance) continue;
+    if (editDistanceAtMost(skillToken, w, maxDistance) <= maxDistance) return true;
+  }
+  return false;
+}
+
 function parseName(cvText: string): string {
   const firstLine = cvText
     .split(/\r?\n/)
@@ -222,7 +316,42 @@ function parseName(cvText: string): string {
 }
 
 function parseSkills(cvLower: string): string[] {
-  return CORE_SKILLS.filter((skill) => cvLower.includes(skill)).slice(0, 16);
+  const normalizedCv = normalizeToken(cvLower);
+  const words = extractWordSet(normalizedCv);
+  const found = new Set<string>();
+
+  for (const rawSkill of CORE_SKILLS) {
+    const skill = normalizeToken(SKILL_ALIASES[rawSkill] ?? rawSkill);
+    if (!skill) continue;
+
+    const patterns = new Set<string>([skill]);
+    for (const [aliasRaw, canonicalRaw] of Object.entries(SKILL_ALIASES)) {
+      const alias = normalizeToken(aliasRaw);
+      const canonical = normalizeToken(canonicalRaw);
+      if (canonical === skill) patterns.add(alias);
+    }
+
+    let matched = false;
+    for (const p of patterns) {
+      if (!p) continue;
+      if (p.includes(" ")) {
+        if (normalizedCv.includes(p)) {
+          matched = true;
+          break;
+        }
+      } else if (words.has(p) || normalizedCv.includes(p)) {
+        matched = true;
+        break;
+      } else if (isApproximateWordMatch(p, words)) {
+        matched = true;
+        break;
+      }
+    }
+
+    if (matched) found.add(skill);
+  }
+
+  return Array.from(found).slice(0, 20);
 }
 
 function parseLanguages(cvLower: string): string[] {
