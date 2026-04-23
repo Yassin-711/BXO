@@ -55,37 +55,79 @@ ${rubricBlock}
 ${cvText}`;
 }
 
+function ingestBreakdownRow(
+  byId: Map<string, VitaeBreakdownRow>,
+  rubricMax: Map<string, number>,
+  criterionId: string,
+  row: Record<string, unknown>
+): void {
+  const maxAllowed = rubricMax.get(criterionId);
+  if (maxAllowed === undefined) return;
+
+  let earned = Math.round(Number(row.earned));
+  if (!Number.isFinite(earned)) earned = 0;
+  earned = Math.max(0, Math.min(maxAllowed, earned));
+
+  let maxPoints = Math.round(Number(row.maxPoints));
+  if (!Number.isFinite(maxPoints) || maxPoints <= 0) maxPoints = maxAllowed;
+  maxPoints = Math.min(maxPoints, maxAllowed);
+
+  const evidence =
+    typeof row.evidence === "string" && row.evidence.trim().length > 0
+      ? row.evidence.trim().slice(0, 500)
+      : "Not stated in CV";
+
+  byId.set(criterionId, {
+    criterionId,
+    maxPoints,
+    earned,
+    evidence,
+  });
+}
+
+/**
+ * Models may send scores as top-level objects AND a parallel `breakdown` array full of zeros /
+ * placeholders. Apply sources in priority order so real scores win.
+ */
 function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<string, unknown> {
   const rubricMax = new Map<string, number>(VITAE_RUBRIC.map((r) => [r.id, r.max]));
   const byId = new Map<string, VitaeBreakdownRow>();
   const rawBreakdown = analysis.breakdown;
 
+  // 1) Top-level rubric objects ({ education: { earned, … }, … }) — authoritative when present
+  for (const r of VITAE_RUBRIC) {
+    const raw = analysis[r.id];
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      ingestBreakdownRow(byId, rubricMax, r.id, raw as Record<string, unknown>);
+    }
+  }
+
+  // 2) Top-level strings (skills / languages often only appear as plain text)
+  for (const r of VITAE_RUBRIC) {
+    if (byId.has(r.id)) continue;
+    const raw = analysis[r.id];
+    if (typeof raw === "string" && raw.trim().length > 0) {
+      const maxAllowed = rubricMax.get(r.id);
+      if (maxAllowed === undefined) continue;
+      byId.set(r.id, {
+        criterionId: r.id,
+        maxPoints: maxAllowed,
+        earned: 0,
+        evidence: raw.trim().slice(0, 500),
+      });
+    }
+  }
+
+  // 3) `breakdown` array — only fill IDs we still don't have (skips bogus placeholder rows when top-level already scored)
   if (Array.isArray(rawBreakdown)) {
     for (const raw of rawBreakdown) {
       if (!raw || typeof raw !== "object") continue;
       const row = raw as Record<string, unknown>;
-      // OpenRouter / Qwen often returns "id" instead of "criterionId"
       const criterionId = String(
         row.criterionId ?? row.id ?? row.category ?? ""
       ).trim();
-      const maxAllowed = rubricMax.get(criterionId);
-      if (maxAllowed === undefined) continue;
-
-      let earned = Math.round(Number(row.earned));
-      if (!Number.isFinite(earned)) earned = 0;
-      earned = Math.max(0, Math.min(maxAllowed, earned));
-
-      const evidence =
-        typeof row.evidence === "string" && row.evidence.trim().length > 0
-          ? row.evidence.trim().slice(0, 500)
-          : "Not stated in CV";
-
-      byId.set(criterionId, {
-        criterionId,
-        maxPoints: maxAllowed,
-        earned,
-        evidence,
-      });
+      if (!criterionId || byId.has(criterionId)) continue;
+      ingestBreakdownRow(byId, rubricMax, criterionId, row);
     }
   }
 
@@ -102,111 +144,217 @@ function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<strin
 
   const vitaeScore = breakdown.reduce((s, row) => s + row.earned, 0);
 
+  const cleaned: Record<string, unknown> = { ...analysis, breakdown, vitaeScore };
+  for (const r of VITAE_RUBRIC) {
+    delete cleaned[r.id];
+  }
+
+  return cleaned;
+}
+
+const ROLE_SKILL_MAP: Array<{ role: string; keywords: string[] }> = [
+  {
+    role: "Data / Analytics",
+    keywords: ["python", "sql", "pandas", "power bi", "tableau", "numpy", "excel", "statistics"],
+  },
+  {
+    role: "Backend Engineering",
+    keywords: ["node", "express", "java", "spring", "api", "postgres", "mongodb", "docker"],
+  },
+  {
+    role: "Frontend Engineering",
+    keywords: ["react", "javascript", "typescript", "html", "css", "next.js", "tailwind", "redux"],
+  },
+  {
+    role: "Mobile Development",
+    keywords: ["android", "ios", "flutter", "react native", "kotlin", "swift", "dart"],
+  },
+  {
+    role: "Cloud / DevOps",
+    keywords: ["aws", "azure", "gcp", "kubernetes", "terraform", "ci/cd", "jenkins", "linux"],
+  },
+];
+
+const CORE_SKILLS = Array.from(
+  new Set(
+    ROLE_SKILL_MAP.flatMap((r) => r.keywords).concat([
+      "git",
+      "c++",
+      "c#",
+      "php",
+      "go",
+      "machine learning",
+      "deep learning",
+      "nlp",
+      "tensorflow",
+      "pytorch",
+      "scikit-learn",
+      "figma",
+      "firebase",
+    ])
+  )
+);
+
+const KNOWN_LANGUAGES = [
+  "english",
+  "arabic",
+  "french",
+  "german",
+  "spanish",
+  "italian",
+  "turkish",
+  "urdu",
+  "hindi",
+  "chinese",
+];
+
+function normalizeWhitespace(input: string): string {
+  return input.replace(/\s+/g, " ").trim();
+}
+
+function parseName(cvText: string): string {
+  const firstLine = cvText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) return "Candidate";
+  return firstLine.replace(/[^\p{L}\p{N}\s.'-]/gu, "").trim().slice(0, 80) || "Candidate";
+}
+
+function parseSkills(cvLower: string): string[] {
+  return CORE_SKILLS.filter((skill) => cvLower.includes(skill)).slice(0, 16);
+}
+
+function parseLanguages(cvLower: string): string[] {
+  return KNOWN_LANGUAGES.filter((lang) => cvLower.includes(lang)).slice(0, 6);
+}
+
+function inferMajor(skills: string[]): string {
+  let topRole = "General";
+  let topScore = 0;
+  for (const role of ROLE_SKILL_MAP) {
+    const score = role.keywords.reduce((sum, kw) => sum + (skills.includes(kw) ? 1 : 0), 0);
+    if (score > topScore) {
+      topScore = score;
+      topRole = role.role;
+    }
+  }
+  return topRole;
+}
+
+function countKeywordHits(cvLower: string, words: string[]): number {
+  return words.reduce((sum, word) => sum + (cvLower.includes(word) ? 1 : 0), 0);
+}
+
+function capScore(raw: number, max: number): number {
+  if (!Number.isFinite(raw)) return 0;
+  return Math.max(0, Math.min(max, Math.round(raw)));
+}
+
+type OfflineAnalysis = {
+  name: string;
+  majors: string;
+  languages: string;
+  skills: string;
+  vitaeScore: number;
+  reasoning: string;
+  breakdown: VitaeBreakdownRow[];
+};
+
+function buildOfflineAnalysis(cvText: string): OfflineAnalysis {
+  const cvLower = cvText.toLowerCase();
+  const name = parseName(cvText);
+  const skillsArr = parseSkills(cvLower);
+  const languagesArr = parseLanguages(cvLower);
+  const majors = inferMajor(skillsArr);
+
+  const eduHits = countKeywordHits(cvLower, [
+    "bachelor",
+    "master",
+    "phd",
+    "university",
+    "college",
+    "faculty",
+    "degree",
+  ]);
+  const expHits = countKeywordHits(cvLower, [
+    "experience",
+    "intern",
+    "engineer",
+    "developer",
+    "manager",
+    "analyst",
+    "worked",
+    "employment",
+    "project",
+  ]);
+  const certHits = countKeywordHits(cvLower, [
+    "certification",
+    "certificate",
+    "course",
+    "coursera",
+    "udemy",
+    "aws certified",
+    "project",
+    "github",
+  ]);
+
+  const education = capScore(eduHits * 4, 20);
+  const experience = capScore(expHits * 4, 35);
+  const skills = capScore(skillsArr.length * 2, 25);
+  const languages = capScore(languagesArr.length * 3 + (languagesArr.length > 0 ? 1 : 0), 10);
+  const certsProjects = capScore(certHits * 2, 10);
+
+  const breakdown: VitaeBreakdownRow[] = [
+    {
+      criterionId: "education",
+      maxPoints: 20,
+      earned: education,
+      evidence: education ? "Education-related terms found in CV text." : "No clear education details detected.",
+    },
+    {
+      criterionId: "experience",
+      maxPoints: 35,
+      earned: experience,
+      evidence: experience ? "Experience and role keywords found in CV text." : "No clear work experience signals detected.",
+    },
+    {
+      criterionId: "skills",
+      maxPoints: 25,
+      earned: skills,
+      evidence: skillsArr.length ? `Detected skills: ${skillsArr.slice(0, 8).join(", ")}.` : "No known technical skills matched.",
+    },
+    {
+      criterionId: "languages",
+      maxPoints: 10,
+      earned: languages,
+      evidence: languagesArr.length ? `Detected languages: ${languagesArr.join(", ")}.` : "No languages section detected.",
+    },
+    {
+      criterionId: "certsProjects",
+      maxPoints: 10,
+      earned: certsProjects,
+      evidence: certsProjects ? "Projects/certification keywords detected." : "No clear certifications or projects detected.",
+    },
+  ];
+
+  const vitaeScore = breakdown.reduce((sum, row) => sum + row.earned, 0);
+  const languageSummary = languagesArr.length ? languagesArr.map((l) => l[0].toUpperCase() + l.slice(1)).join(", ") : "Not stated";
+  const skillSummary = skillsArr.length ? skillsArr.join(", ") : "general communication, teamwork";
+
+  const reasoning =
+    `This score is computed offline with a lightweight keyword rubric to run on low-resource servers. ` +
+    `The profile aligns most with ${majors} based on detected skill and experience terms.`;
+
   return {
-    ...analysis,
-    breakdown,
+    name,
+    majors,
+    languages: languageSummary,
+    skills: skillSummary,
     vitaeScore,
+    reasoning,
+    breakdown,
   };
-}
-
-const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions";
-/** Qwen3-based “Plus” on OpenRouter; override with OPENROUTER_MODEL. */
-const DEFAULT_OPENROUTER_MODEL = "qwen/qwen-plus-2025-07-28";
-
-function stripJsonFromAssistantContent(content: string): string {
-  let s = content.trim();
-  const fenced = /^```(?:json)?\s*\r?\n?([\s\S]*?)\r?\n?```$/i.exec(s);
-  if (fenced) return fenced[1].trim();
-  return s;
-}
-
-async function analyzeCvTextWithOpenRouter(cvText: string): Promise<Record<string, unknown>> {
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey?.trim() || apiKey === "OPENROUTER_API_KEY") {
-    throw new Error(
-      "OPENROUTER_API_KEY is not configured. Set it in your environment (e.g. Render → Environment)."
-    );
-  }
-
-  const model = process.env.OPENROUTER_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL;
-  const userPrompt = buildCvAnalysisPrompt(cvText);
-
-  const payload: Record<string, unknown> = {
-    model,
-    messages: [
-      {
-        role: "system",
-        content:
-          "You must respond with a single JSON object only—no markdown code fences, no commentary before or after. Follow the user's schema exactly.",
-      },
-      { role: "user", content: userPrompt },
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0.1,
-    top_p: 0.3,
-  };
-
-  const maxTok = process.env.OPENROUTER_MAX_TOKENS?.trim();
-  if (maxTok) {
-    const n = parseInt(maxTok, 10);
-    if (Number.isFinite(n) && n > 0) payload.max_tokens = n;
-  }
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${apiKey.trim()}`,
-    "Content-Type": "application/json",
-  };
-  const referer = process.env.OPENROUTER_HTTP_REFERER?.trim();
-  if (referer) headers["HTTP-Referer"] = referer;
-  const appTitle = process.env.OPENROUTER_APP_NAME?.trim();
-  if (appTitle) headers["X-Title"] = appTitle;
-
-  const res = await fetch(OPENROUTER_CHAT_URL, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  });
-
-  const rawBody = await res.text();
-  if (!res.ok) {
-    throw new Error(`OpenRouter HTTP ${res.status}: ${rawBody.slice(0, 800)}`);
-  }
-
-  let data: {
-    choices?: Array<{ message?: { content?: string | null } }>;
-    error?: { message?: string };
-  };
-  try {
-    data = JSON.parse(rawBody) as typeof data;
-  } catch {
-    throw new Error(`OpenRouter returned non-JSON: ${rawBody.slice(0, 200)}`);
-  }
-
-  if (data.error?.message) {
-    throw new Error(`OpenRouter error: ${data.error.message}`);
-  }
-
-  const content = data.choices?.[0]?.message?.content;
-  if (content == null || typeof content !== "string") {
-    throw new Error("OpenRouter returned empty choices[0].message.content");
-  }
-
-  const jsonStr = stripJsonFromAssistantContent(content);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch (e) {
-    const hint = e instanceof Error ? e.message : String(e);
-    throw new Error(
-      `Failed to parse model JSON (${hint}). Snippet: ${jsonStr.slice(0, 400)}`
-    );
-  }
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Model JSON must be a single object");
-  }
-
-  return parsed as Record<string, unknown>;
 }
 
 const GOOGLE_SCOPES = [
@@ -443,11 +591,7 @@ async function startServer() {
         status: "ok", 
         time: new Date().toISOString(),
         env: {
-          hasOpenRouterKey:
-            !!process.env.OPENROUTER_API_KEY &&
-            process.env.OPENROUTER_API_KEY !== "OPENROUTER_API_KEY",
-          isPlaceholderOpenRouterKey: process.env.OPENROUTER_API_KEY === "OPENROUTER_API_KEY",
-          openRouterModel: process.env.OPENROUTER_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL,
+          analysisMode: "offline_rule_based",
           hasGoogleEmail: !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
           hasGoogleKey: !!process.env.GOOGLE_PRIVATE_KEY,
           googleKeyFormatOk: !!process.env.GOOGLE_PRIVATE_KEY && (process.env.GOOGLE_PRIVATE_KEY.includes('BEGIN PRIVATE KEY') || process.env.GOOGLE_PRIVATE_KEY.includes('\\n')),
@@ -490,44 +634,9 @@ async function startServer() {
           return res.status(400).json({ error: "The PDF appears to be empty or unreadable (e.g., it might be a scanned image without OCR)." });
         }
 
-        // 2. Analyze with OpenRouter (default: Qwen Plus) — fetch only, no Gemini SDK
-        console.log("Calling OpenRouter...");
-        let analysis: any = null;
-        let retries = 3;
-        let lastError: any = null;
-
-        while (retries > 0) {
-          try {
-            const raw = await analyzeCvTextWithOpenRouter(cvText);
-            console.log("Raw OpenRouter analysis:", JSON.stringify(raw).slice(0, 2000));
-            analysis = normalizeVitaeAnalysis(raw);
-            console.log("OpenRouter analysis successful");
-            break;
-          } catch (err: any) {
-            lastError = err;
-            const msg = String(err?.message ?? err);
-            const isRetryable =
-              msg.includes("429") ||
-              msg.includes("502") ||
-              msg.includes("503") ||
-              msg.includes("529") ||
-              msg.includes("UNAVAILABLE") ||
-              /rate limit|overloaded|high demand|temporarily/i.test(msg);
-
-            if (isRetryable && retries > 1) {
-              console.warn(`OpenRouter busy or rate-limited. Retrying in 2s... (${retries - 1} left)`);
-              await new Promise((r) => setTimeout(r, 2000));
-              retries--;
-            } else {
-              console.error("OpenRouter analysis error:", msg);
-              throw err;
-            }
-          }
-        }
-
-        if (!analysis) {
-          throw lastError || new Error("Failed to analyze CV after retries");
-        }
+        // 2. Analyze with local lightweight rules (no external model calls)
+        console.log("Running lightweight offline analysis...");
+        const analysis = buildOfflineAnalysis(cvText);
 
         // 3. Upload to Google Drive (folder MUST be on a Shared Drive — service accounts have no My Drive quota)
         let driveLink = "Not Configured";

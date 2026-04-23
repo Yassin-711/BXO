@@ -86,14 +86,7 @@ export default function App() {
       if (contentType && contentType.indexOf("application/json") !== -1) {
         const data = await response.json();
         if (!response.ok) {
-          let errorMessage = data.error || `Server error: ${response.status}`;
-          if (
-            errorMessage.includes("OPENROUTER_API_KEY") ||
-            errorMessage.toLowerCase().includes("openrouter")
-          ) {
-            errorMessage =
-              "OpenRouter API key is missing or invalid. Set OPENROUTER_API_KEY in your environment (e.g. Render → Environment).";
-          }
+          const errorMessage = data.error || `Server error: ${response.status}`;
           throw new Error(errorMessage);
         }
         setResult(data);
@@ -172,7 +165,7 @@ export default function App() {
 
             <div className="space-y-4">
               {[
-                { icon: Cpu, text: "AI-Powered Extraction", sub: "OpenRouter · Qwen Plus" },
+                { icon: Cpu, text: "Lightweight Extraction", sub: "Offline rule-based scoring" },
                 { icon: Award, text: "BXO Scoring System", sub: "Proprietary ranking algorithm" },
                 { icon: CheckCircle2, text: "Google Workspace Sync", sub: "Drive & Sheets integration" }
               ].map((item, i) => (
@@ -292,7 +285,7 @@ export default function App() {
                     {isAnalyzing ? (
                       <>
                         <Loader2 className="w-6 h-6 animate-spin" />
-                        Analyzing with AI...
+                        Analyzing CV...
                       </>
                     ) : (
                       <>
