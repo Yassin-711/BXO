@@ -11,3 +11,32 @@
   background-size: 48px 48px;
   mask-image: linear-gradient(to bottom, black, transparent 85%);
 }
+
+.brand-mark {
+  background: linear-gradient(145deg, #8b5cf6 0%, #4f46e5 48%, #2563eb 100%);
+  box-shadow: 0 10px 24px rgba(79, 70, 229, .28), inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 -1px 0 rgba(30, 27, 75, .3);
+  overflow: hidden;
+}
+
+.brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: 1px;
+  border-radius: inherit;
+  border: 1px solid rgba(255, 255, 255, .28);
+}
+
+.brand-shine {
+  position: absolute;
+  width: 140%;
+  height: 55%;
+  left: -35%;
+  top: -12%;
+  transform: rotate(-18deg);
+  background: linear-gradient(180deg, rgba(255,255,255,.58), rgba(255,255,255,0));
+  filter: blur(1px);
+}
+
+.app-mesh {
+  background-image: radial-gradient(circle at 15% 5%, rgba(99, 102, 241, .12), transparent 28%), radial-gradient(circle at 85% 32%, rgba(139, 92, 246, .09), transparent 25%);
+}

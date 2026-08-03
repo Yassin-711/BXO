@@ -1,7 +1,8 @@
 import React, { FormEvent, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { AlertCircle, ArrowLeft, Check, Eye, EyeOff, Loader2, LockKeyhole, Plus, ShieldCheck, Trash2, UserCog, Users } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, LockKeyhole, Plus, Trash2, UserCog, Users } from 'lucide-react';
 import Analyzer from './App';
+import Brand from './Brand';
 
 type Role = 'admin' | 'user';
 type SessionUser = { id: number; username: string; role: Role };
@@ -16,17 +17,6 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'Something went wrong');
   return data;
-}
-
-function Brand() {
-  return (
-    <div className="flex items-center gap-3">
-      <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-indigo-200">
-        <ShieldCheck className="text-white w-6 h-6" />
-      </div>
-      <span className="font-bold text-2xl tracking-tight">BXO<span className="text-indigo-600">.</span></span>
-    </div>
-  );
 }
 
 function PasswordInput({ value, onChange, placeholder = 'Password', required = true }: { value: string; onChange: (value: string) => void; placeholder?: string; required?: boolean }) {
@@ -71,7 +61,7 @@ function AccessScreen({ setupRequired, onAuthenticated }: { setupRequired: boole
       <section className="hidden lg:flex relative overflow-hidden bg-slate-950 text-white p-16 flex-col justify-between">
         <div className="absolute inset-0 auth-grid opacity-30" />
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-indigo-600/30 blur-3xl rounded-full" />
-        <div className="relative"><Brand /></div>
+        <div className="relative"><Brand inverse /></div>
         <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} className="relative max-w-xl">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/10 border border-white/10 text-sm text-indigo-200 mb-7">
             <LockKeyhole className="w-4 h-4" /> Private workspace

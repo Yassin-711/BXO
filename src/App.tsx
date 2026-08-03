@@ -12,10 +12,12 @@ import {
   Languages,
   Cpu,
   ArrowRight,
-  ShieldCheck
-  ,LogOut,
-  Users
+  LogOut,
+  Users,
+  Sparkles,
+  LockKeyhole
 } from 'lucide-react';
+import Brand from './Brand';
 
 interface ScoreBreakdownRow {
   criterionId: string;
@@ -52,18 +54,23 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (selectedFile && selectedFile.type === 'application/pdf') {
+  const selectFile = (selectedFile?: File) => {
+    if (selectedFile && selectedFile.type === 'application/pdf' && selectedFile.size <= 4 * 1024 * 1024) {
       setFile(selectedFile);
       setError(null);
+    } else if (selectedFile && selectedFile.size > 4 * 1024 * 1024) {
+      setError('Please upload a PDF smaller than 4MB.');
+      setFile(null);
     } else {
       setError('Please upload a valid PDF file.');
       setFile(null);
     }
   };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => selectFile(e.target.files?.[0]);
 
   const handleUpload = async () => {
     if (!file) return;
@@ -137,44 +144,41 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
   };
 
   return (
-    <div className="min-h-screen bg-[#fafafa] text-slate-900 font-sans selection:bg-indigo-100">
+    <div className="min-h-screen bg-[#fafafa] app-mesh text-slate-900 font-sans selection:bg-indigo-100 overflow-hidden">
       {/* Header */}
-      <header className="border-b border-slate-200 bg-white/80 backdrop-blur-md sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center">
-              <ShieldCheck className="text-white w-5 h-5" />
-            </div>
-            <span className="font-bold text-xl tracking-tight">BXO<span className="text-indigo-600">.</span></span>
-          </div>
+      <header className="border-b border-white/70 bg-white/75 backdrop-blur-xl sticky top-0 z-20 shadow-[0_1px_20px_rgba(15,23,42,.04)]">
+        <div className="max-w-6xl mx-auto px-6 h-[72px] flex items-center justify-between">
+          <Brand compact />
           <nav className="flex items-center gap-2 text-sm font-medium text-slate-500">
-            <span className="hidden sm:inline px-3">{user.username}</span>
-            {user.role === 'admin' && <button onClick={onOpenAdmin} className="p-2.5 rounded-xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors" title="Account management"><Users className="w-5 h-5" /></button>}
-            <button onClick={onLogout} className="p-2.5 rounded-xl hover:bg-red-50 hover:text-red-500 transition-colors" title="Sign out"><LogOut className="w-5 h-5" /></button>
+            <span className="hidden sm:inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100/80 text-slate-600"><span className="w-2 h-2 rounded-full bg-emerald-500" />{user.username}</span>
+            {user.role === 'admin' && <button onClick={onOpenAdmin} className="p-2.5 rounded-xl border border-transparent hover:border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all" title="Account management"><Users className="w-5 h-5" /></button>}
+            <button onClick={onLogout} className="p-2.5 rounded-xl border border-transparent hover:border-red-100 hover:bg-red-50 hover:text-red-500 transition-all" title="Sign out"><LogOut className="w-5 h-5" /></button>
           </nav>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-12 md:py-20">
-        <div className="grid lg:grid-cols-2 gap-16 items-start">
+      <main className="relative max-w-6xl mx-auto px-6 py-12 md:py-20 lg:py-24">
+        <div className="grid lg:grid-cols-[1.05fr_.95fr] gap-12 lg:gap-20 items-start">
           {/* Left Column: Info */}
-          <div className="space-y-8">
+          <div className="space-y-9 lg:sticky lg:top-28">
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.5 }}
             >
-              <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight leading-[1.1] mb-6">
-                Intelligent <span className="text-indigo-600">CV analysis</span> tool for{' '}
-                <span className="text-indigo-600">OGT AIESEC</span> in{' '}
-                <span className="text-indigo-600">Alexandria</span>
+              <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-white border border-indigo-100 text-indigo-700 text-xs font-bold uppercase tracking-[.16em] shadow-sm mb-6">
+                <Sparkles className="w-4 h-4" /> Intelligent talent screening
+              </div>
+              <h1 className="text-5xl md:text-6xl lg:text-[4.25rem] font-black tracking-[-0.055em] leading-[.98] mb-7 text-slate-950">
+                Better CV decisions,{' '}
+                <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-blue-600 bg-clip-text text-transparent">beautifully simple.</span>
               </h1>
-              <p className="text-lg text-slate-600 leading-relaxed max-w-md">
-                Upload a PDF resume to extract key insights, calculate a BXO Score, and sync directly to your Google ecosystem.
+              <p className="text-lg text-slate-600 leading-relaxed max-w-lg">
+                Turn every resume into structured insight, a transparent BXO Score, and a ready-to-review candidate profile for OGT AIESEC Alexandria.
               </p>
             </motion.div>
 
-            <div className="space-y-4">
+            <div className="grid sm:grid-cols-3 lg:grid-cols-1 gap-3">
               {[
                 { icon: Cpu, text: "AI-Powered Extraction", sub: "OpenRouter · Qwen Plus" },
                 { icon: Award, text: "BXO Scoring System", sub: "Proprietary ranking algorithm" },
@@ -185,9 +189,9 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: 0.2 + i * 0.1 }}
-                  className="flex items-start gap-4 p-4 rounded-2xl hover:bg-white hover:shadow-sm transition-all border border-transparent hover:border-slate-100"
+                  className="group flex items-start gap-4 p-4 rounded-2xl bg-white/55 hover:bg-white hover:shadow-lg hover:shadow-indigo-100/50 transition-all border border-white hover:border-indigo-100"
                 >
-                  <div className="p-2.5 bg-indigo-50 rounded-xl text-indigo-600">
+                  <div className="p-2.5 bg-gradient-to-br from-indigo-50 to-violet-100 rounded-xl text-indigo-600 group-hover:scale-105 transition-transform">
                     <item.icon className="w-5 h-5" />
                   </div>
                   <div>
@@ -198,8 +202,8 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
               ))}
             </div>
 
-            <p className="text-sm text-slate-500 pt-2">
-              made by Yassin Elhawash LCVP BXO
+            <p className="text-xs font-semibold uppercase tracking-[.14em] text-slate-400 pt-1">
+              Crafted by Yassin Elhawash · LCVP BXO
             </p>
           </div>
 
@@ -212,21 +216,27 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                   initial={{ opacity: 0, scale: 0.95 }}
                   animate={{ opacity: 1, scale: 1 }}
                   exit={{ opacity: 0, scale: 0.95 }}
-                  className="bg-white rounded-3xl p-8 shadow-xl shadow-indigo-100/50 border border-slate-100"
+                  className="relative bg-white/90 backdrop-blur-xl rounded-[2rem] p-6 sm:p-8 shadow-[0_28px_80px_rgba(79,70,229,.14)] border border-white ring-1 ring-slate-200/70 overflow-hidden"
                 >
+                  <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-blue-500" />
                   <div className="mb-8 text-center">
-                    <h2 className="text-2xl font-bold mb-2">Upload Resume</h2>
-                    <p className="text-slate-500 text-sm">PDF format only, max 10MB</p>
+                    <div className="mx-auto mb-4 w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center"><Upload className="w-6 h-6" /></div>
+                    <h2 className="text-2xl font-black tracking-tight mb-2">Analyze a resume</h2>
+                    <p className="text-slate-500 text-sm">Upload one PDF and get a structured score in moments.</p>
                   </div>
 
                   <div
                     onClick={() => fileInputRef.current?.click()}
+                    onDragEnter={(event) => { event.preventDefault(); setIsDragging(true); }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDragLeave={() => setIsDragging(false)}
+                    onDrop={(event) => { event.preventDefault(); setIsDragging(false); selectFile(event.dataTransfer.files?.[0]); }}
                     className={`
                       relative group cursor-pointer
-                      border-2 border-dashed rounded-2xl p-12
+                      border-2 border-dashed rounded-3xl p-10 sm:p-12
                       flex flex-col items-center justify-center gap-4
                       transition-all duration-300
-                      ${file ? 'border-indigo-500 bg-indigo-50/30' : 'border-slate-200 hover:border-indigo-400 hover:bg-slate-50'}
+                      ${file || isDragging ? 'border-indigo-500 bg-indigo-50/70 scale-[1.01]' : 'border-slate-200 bg-slate-50/60 hover:border-indigo-400 hover:bg-indigo-50/40'}
                     `}
                   >
                     <input
@@ -238,18 +248,18 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                     />
 
                     <div className={`
-                      w-16 h-16 rounded-full flex items-center justify-center transition-transform duration-300
-                      ${file ? 'bg-indigo-600 text-white scale-110' : 'bg-slate-100 text-slate-400 group-hover:scale-110'}
+                      w-16 h-16 rounded-2xl flex items-center justify-center transition-all duration-300 shadow-sm
+                      ${file ? 'bg-gradient-to-br from-indigo-500 to-violet-600 text-white scale-105 shadow-lg shadow-indigo-200' : 'bg-white text-slate-400 group-hover:scale-105 group-hover:text-indigo-600'}
                     `}>
                       {file ? <FileText className="w-8 h-8" /> : <Upload className="w-8 h-8" />}
                     </div>
 
                     <div className="text-center">
                       <p className="font-medium text-slate-900">
-                        {file ? file.name : "Click to browse or drag and drop"}
+                        {file ? file.name : isDragging ? "Drop your PDF here" : "Drag and drop your resume"}
                       </p>
                       <p className="text-xs text-slate-500 mt-1">
-                        {file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "Support for standard PDF resumes"}
+                        {file ? `${(file.size / 1024 / 1024).toFixed(2)} MB · Ready to analyze` : "or click to browse · PDF up to 4MB"}
                       </p>
                     </div>
                   </div>
@@ -287,10 +297,10 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                     disabled={!file || isAnalyzing}
                     onClick={handleUpload}
                     className={`
-                      w-full mt-8 py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-all
+                      w-full mt-8 py-4 rounded-2xl font-bold text-lg flex items-center justify-center gap-3 transition-all duration-300
                       ${!file || isAnalyzing
                         ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                        : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg shadow-indigo-200 active:scale-[0.98]'}
+                        : 'bg-gradient-to-r from-indigo-600 to-violet-600 text-white hover:shadow-xl hover:shadow-indigo-200 hover:-translate-y-0.5 shadow-lg shadow-indigo-200 active:scale-[0.98]'}
                     `}
                   >
                     {isAnalyzing ? (
@@ -305,20 +315,22 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                       </>
                     )}
                   </button>
+                  <div className="mt-5 flex items-center justify-center gap-2 text-xs text-slate-400"><LockKeyhole className="w-3.5 h-3.5" />Your file is processed securely</div>
                 </motion.div>
               ) : (
                 <motion.div
                   key="result-card"
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="bg-white rounded-3xl p-8 shadow-xl shadow-indigo-100/50 border border-slate-100"
+                  className="relative bg-white/95 backdrop-blur-xl rounded-[2rem] p-6 sm:p-8 shadow-[0_28px_80px_rgba(79,70,229,.14)] border border-white ring-1 ring-slate-200/70 overflow-hidden"
                 >
+                  <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-blue-500" />
                   <div className="flex items-center justify-between mb-8">
                     <div>
                       <h2 className="text-3xl font-bold text-slate-900">{result.name}</h2>
                       <p className="text-indigo-600 font-medium">{result.majors}</p>
                     </div>
-                    <div className="text-right">
+                    <div className="text-right rounded-2xl bg-slate-50 px-4 py-3 border border-slate-100">
                       <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">BXO Score</div>
                       <div className={`text-4xl font-black ${result.vitaeScore > 80 ? 'text-emerald-500' : result.vitaeScore > 50 ? 'text-amber-500' : 'text-slate-900'}`}>
                         {result.vitaeScore}
@@ -330,7 +342,7 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                   </div>
 
                   {result.breakdown && result.breakdown.length > 0 && (
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+                    <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-slate-50 to-white p-5 space-y-4 shadow-inner shadow-slate-100">
                       <div className="text-xs font-bold uppercase tracking-wider text-slate-500">Score breakdown</div>
                       <ul className="space-y-3">
                         {result.breakdown.map((row) => (
@@ -343,7 +355,7 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                             </div>
                             <div className="mt-1 h-1.5 rounded-full bg-slate-200 overflow-hidden">
                               <div
-                                className="h-full rounded-full bg-indigo-500 transition-all"
+                                className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-violet-500 transition-all"
                                 style={{ width: `${row.maxPoints ? Math.min(100, (row.earned / row.maxPoints) * 100) : 0}%` }}
                               />
                             </div>
@@ -450,22 +462,13 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
       </main>
 
       {/* Footer */}
-      <footer className="max-w-5xl mx-auto px-6 py-12 border-t border-slate-200">
+      <footer className="max-w-6xl mx-auto px-6 py-10 border-t border-slate-200/70">
         <div className="flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="flex items-center gap-2 opacity-50">
-            <div className="w-6 h-6 bg-slate-900 rounded flex items-center justify-center">
-              <ShieldCheck className="text-white w-4 h-4" />
-            </div>
-            <span className="font-bold text-lg tracking-tight">BXO</span>
-          </div>
+          <div className="opacity-70"><Brand compact /></div>
           <p className="text-slate-400 text-sm">
-            © 2026 BXO AI. All rights reserved.
+            © 2026 BXO CV Analyzer. Internal use only.
           </p>
-          <div className="flex gap-8 text-sm font-medium text-slate-400">
-            <a href="#" className="hover:text-indigo-600">Twitter</a>
-            <a href="#" className="hover:text-indigo-600">GitHub</a>
-            <a href="#" className="hover:text-indigo-600">LinkedIn</a>
-          </div>
+          <div className="text-sm font-medium text-slate-400">OGT AIESEC Alexandria</div>
         </div>
       </footer>
     </div>
