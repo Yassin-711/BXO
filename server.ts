@@ -4,7 +4,7 @@ import path from "path";
 import multer from "multer";
 import cors from "cors";
 import type { JWT } from "google-auth-library";
-import { initializeAuthDatabase, registerAuthRoutes, requireAuth } from "./auth";
+import { initializeAuthDatabase, registerAuthRoutes, requireAuth } from "./auth.js";
 
 /** Load pdf-parse only when parsing — keeps production baseline RAM low (Render 512MB). */
 async function pdf(data: Buffer) {
