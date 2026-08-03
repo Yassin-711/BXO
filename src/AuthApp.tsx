@@ -92,7 +92,7 @@ function AccessScreen({ setupRequired, onAuthenticated }: { setupRequired: boole
           </div>
           <form onSubmit={submit} className="space-y-4">
             {setupRequired && <input value={setupToken} onChange={(event) => setSetupToken(event.target.value)} placeholder="One-time setup token" required className="auth-input" />}
-            <input value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="Username" pattern="[a-z0-9._-]+" minLength={3} required className="auth-input" autoComplete="username" />
+            <input value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="Username" pattern="[a-z0-9._\-]+" minLength={3} required className="auth-input" autoComplete="username" />
             <PasswordInput value={password} onChange={setPassword} />
             {!setupRequired && (
               <label className="flex items-center gap-3 py-2 text-sm text-slate-600 cursor-pointer select-none">
@@ -134,7 +134,7 @@ function UserForm({ user, onClose, onSaved }: { user?: ManagedUser; onClose: () 
         <h3 className="text-2xl font-black mb-2">{user ? 'Edit account' : 'Add account'}</h3>
         <p className="text-sm text-slate-500 mb-7">{user ? 'Update access, role, or credentials.' : 'Create a new internal BXO account.'}</p>
         <div className="space-y-4">
-          <input className="auth-input" value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="Username" required pattern="[a-z0-9._-]+" minLength={3} />
+          <input className="auth-input" value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="Username" required pattern="[a-z0-9._\-]+" minLength={3} />
           <PasswordInput value={password} onChange={setPassword} placeholder={user ? 'New password (leave blank to keep)' : 'Password'} required={!user} />
           <div className="grid grid-cols-2 gap-4">
             <select className="auth-input" value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="user">User</option><option value="admin">Admin</option></select>

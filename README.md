@@ -41,4 +41,4 @@ Google Drive and Sheets variables are documented in `.env.example` and remain op
 
 ## Vercel
 
-Use the `Other` framework preset with the repository root. The included `vercel.json` builds the Vite frontend and deploys `api/[...path].ts` as the Express API function. Configure all variables from `.env.example` in both Production and Preview environments.
+Use the `Other` framework preset with the repository root. The included `vercel.json` builds the Vite frontend and rewrites `/api/*` requests to `api/index.ts`, which runs the Express API. Configure all variables from `.env.example` in both Production and Preview environments.
