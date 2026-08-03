@@ -14,7 +14,8 @@ import {
   LogOut,
   Users,
   Sparkles,
-  LockKeyhole
+  LockKeyhole,
+  Network
 } from 'lucide-react';
 import Brand from './Brand';
 import ThemeToggle from './ThemeToggle';
@@ -49,7 +50,11 @@ interface AnalysisResult {
   success: boolean;
 }
 
-export default function App({ user, onLogout, onOpenAdmin }: { user: { username: string; role: 'admin' | 'user' }; onLogout: () => void; onOpenAdmin: () => void }) {
+type AppRole = 'lcvp' | 'middle_manager' | 'member';
+
+const APP_ROLE_LABELS: Record<AppRole, string> = { lcvp: 'LCVP', middle_manager: 'Middle Manager', member: 'Member' };
+
+export default function App({ user, onLogout, onOpenAdmin, onOpenTeam }: { user: { username: string; role: AppRole }; onLogout: () => void; onOpenAdmin: () => void; onOpenTeam: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -150,9 +155,10 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
         <div className="max-w-6xl mx-auto px-6 h-[72px] flex items-center justify-between">
           <Brand compact />
           <nav className="flex items-center gap-2 text-sm font-medium text-slate-500">
-            <span className="hidden sm:inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100/80 text-slate-600"><span className="w-2 h-2 rounded-full bg-emerald-500" />{user.username}</span>
+            <span className="hidden sm:inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100/80 text-slate-600"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span>{user.username}</span><span className="text-[10px] uppercase tracking-wider text-indigo-600">{APP_ROLE_LABELS[user.role]}</span></span>
             <ThemeToggle />
-            {user.role === 'admin' && <button onClick={onOpenAdmin} className="p-2.5 rounded-xl border border-transparent hover:border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all" title="Account management"><Users className="w-5 h-5" /></button>}
+            {user.role === 'lcvp' && <button onClick={onOpenAdmin} className="p-2.5 rounded-xl border border-transparent hover:border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all" title="Account management"><Users className="w-5 h-5" /></button>}
+            {user.role === 'middle_manager' && <button onClick={onOpenTeam} className="p-2.5 rounded-xl border border-transparent hover:border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all" title="My team"><Network className="w-5 h-5" /></button>}
             <button onClick={onLogout} className="p-2.5 rounded-xl border border-transparent hover:border-red-100 hover:bg-red-50 hover:text-red-500 transition-all" title="Sign out"><LogOut className="w-5 h-5" /></button>
           </nav>
         </div>

@@ -5,7 +5,9 @@ An internal CV analysis workspace for OGT AIESEC Alexandria. Users sign in, uplo
 ## Authentication
 
 - PostgreSQL-backed accounts with case-insensitive usernames
-- `admin` and `user` roles
+- `LCVP`, `Middle Manager`, and `Member` positions
+- LCVPs manage accounts and assign every Member to one Middle Manager
+- Middle Managers can view their assigned Members
 - Passwords hashed with Node.js `scrypt`
 - HTTP-only signed session cookies
 - Standard sessions last 24 hours; “Remember me” lasts 90 days

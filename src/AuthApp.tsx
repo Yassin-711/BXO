@@ -1,13 +1,19 @@
 import React, { FormEvent, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, LockKeyhole, Plus, Trash2, UserCog, Users } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, LockKeyhole, Plus, Trash2, UserCog, Users, Crown, Network } from 'lucide-react';
 import Analyzer from './App';
 import Brand from './Brand';
 import ThemeToggle from './ThemeToggle';
 
-type Role = 'admin' | 'user';
+type Role = 'lcvp' | 'middle_manager' | 'member';
 type SessionUser = { id: number; username: string; role: Role };
-type ManagedUser = SessionUser & { isActive: boolean; createdAt: string; lastLoginAt: string | null; deletedAt?: string | null };
+type ManagedUser = SessionUser & { managerId: number | null; managerUsername?: string | null; isActive: boolean; createdAt: string; lastLoginAt: string | null; deletedAt?: string | null };
+
+const ROLE_LABELS: Record<Role, string> = {
+  lcvp: 'LCVP',
+  middle_manager: 'Middle Manager',
+  member: 'Member',
+};
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -79,7 +85,7 @@ function AccessScreen({ setupRequired, onAuthenticated }: { setupRequired: boole
           <div className="lg:hidden mb-12"><Brand /></div>
           <div className="mb-9">
             <span className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-600">{setupRequired ? 'First-time setup' : 'Welcome back'}</span>
-            <h2 className="text-4xl font-black tracking-tight mt-3">{setupRequired ? 'Create your admin' : 'Sign in to BXO'}</h2>
+            <h2 className="text-4xl font-black tracking-tight mt-3">{setupRequired ? 'Create your LCVP' : 'Sign in to BXO'}</h2>
             <p className="text-slate-500 mt-3">{setupRequired ? 'Use your private one-time token to initialize the workspace.' : 'Enter your internal account credentials to continue.'}</p>
           </div>
           <form onSubmit={submit} className="space-y-4">
@@ -103,10 +109,11 @@ function AccessScreen({ setupRequired, onAuthenticated }: { setupRequired: boole
   );
 }
 
-function UserForm({ user, onClose, onSaved }: { user?: ManagedUser; onClose: () => void; onSaved: () => void }) {
+function UserForm({ user, managers, onClose, onSaved }: { user?: ManagedUser; managers: ManagedUser[]; onClose: () => void; onSaved: () => void }) {
   const [username, setUsername] = useState(user?.username ?? '');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<Role>(user?.role ?? 'user');
+  const [role, setRole] = useState<Role>(user?.role ?? 'member');
+  const [managerId, setManagerId] = useState(user?.managerId?.toString() ?? '');
   const [isActive, setIsActive] = useState(user?.isActive ?? true);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -114,7 +121,7 @@ function UserForm({ user, onClose, onSaved }: { user?: ManagedUser; onClose: () 
   async function submit(event: FormEvent) {
     event.preventDefault(); setLoading(true); setError('');
     try {
-      await api(user ? `/users/${user.id}` : '/users', { method: user ? 'PATCH' : 'POST', body: JSON.stringify({ username, password: password || undefined, role, isActive }) });
+      await api(user ? `/users/${user.id}` : '/users', { method: user ? 'PATCH' : 'POST', body: JSON.stringify({ username, password: password || undefined, role, managerId: role === 'member' ? Number(managerId) : null, isActive }) });
       onSaved();
     } catch (saveError) { setError(saveError instanceof Error ? saveError.message : 'Unable to save account'); }
     finally { setLoading(false); }
@@ -128,10 +135,20 @@ function UserForm({ user, onClose, onSaved }: { user?: ManagedUser; onClose: () 
         <div className="space-y-4">
           <input className="auth-input" value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="Username" required pattern="[a-z0-9._\-]+" minLength={3} />
           <PasswordInput value={password} onChange={setPassword} placeholder={user ? 'New password (leave blank to keep)' : 'Password'} required={!user} />
-          <div className="grid grid-cols-2 gap-4">
-            <select className="auth-input" value={role} onChange={(event) => setRole(event.target.value as Role)}><option value="user">User</option><option value="admin">Admin</option></select>
+          <div className="grid sm:grid-cols-2 gap-4">
+            <select className="auth-input" value={role} onChange={(event) => { setRole(event.target.value as Role); if (event.target.value !== 'member') setManagerId(''); }}><option value="member">Member</option><option value="middle_manager">Middle Manager</option><option value="lcvp">LCVP</option></select>
             <select className="auth-input" value={isActive ? 'active' : 'disabled'} onChange={(event) => setIsActive(event.target.value === 'active')}><option value="active">Active</option><option value="disabled">Disabled</option></select>
           </div>
+          {role === 'member' && (
+            <div>
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Assigned Middle Manager</label>
+              <select className="auth-input" value={managerId} onChange={(event) => setManagerId(event.target.value)} required>
+                <option value="">Select a Middle Manager</option>
+                {managers.map((manager) => <option key={manager.id} value={manager.id}>{manager.username}</option>)}
+              </select>
+              {!managers.length && <p className="mt-2 text-xs text-amber-600">Create an active Middle Manager before adding Members.</p>}
+            </div>
+          )}
           {error && <div className="p-3 rounded-xl bg-red-50 text-red-600 text-sm">{error}</div>}
           <div className="flex gap-3 pt-3"><button type="button" onClick={onClose} className="flex-1 h-12 rounded-xl bg-slate-100 font-bold text-slate-600">Cancel</button><button disabled={loading} className="flex-1 h-12 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center gap-2">{loading && <Loader2 className="w-4 h-4 animate-spin" />}Save account</button></div>
         </div>
@@ -164,12 +181,45 @@ function AdminPanel({ currentUser, onBack }: { currentUser: SessionUser; onBack:
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-5 mb-9"><div><span className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-600">Administration</span><h1 className="text-3xl sm:text-4xl font-black tracking-tight mt-2">Account management</h1><p className="text-slate-500 mt-2">Create and control access to the internal workspace.</p></div><button onClick={() => setEditing('new')} className="h-12 px-5 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"><Plus className="w-5 h-5" />Add account</button></div>
         {error && <div className="mb-6 p-4 rounded-xl bg-red-50 text-red-600">{error}</div>}
         <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
-          <div className="overflow-x-auto overscroll-x-contain"><table className="w-full min-w-[860px] text-left"><thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-6 py-4">Account</th><th className="px-6 py-4">Role</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Created</th><th className="px-6 py-4">Last login</th><th className="px-6 py-4 text-right">Actions</th></tr></thead>
-          <tbody className="divide-y divide-slate-100">{users.map((user) => <tr key={user.id} className="hover:bg-slate-50/60"><td className="px-6 py-5"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center"><UserCog className="w-5 h-5" /></div><div><div className="font-bold">{user.username}</div>{user.id === currentUser.id && <span className="text-xs text-indigo-600">You</span>}</div></div></td><td className="px-6 py-5 capitalize font-medium">{user.role}</td><td className="px-6 py-5"><span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${user.isActive && !user.deletedAt ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><span className="w-1.5 h-1.5 rounded-full bg-current" />{user.isActive && !user.deletedAt ? 'Active' : 'Disabled'}</span></td><td className="px-6 py-5 text-sm text-slate-500">{new Date(user.createdAt).toLocaleDateString()}</td><td className="px-6 py-5 text-sm text-slate-500">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</td><td className="px-6 py-5"><div className="flex justify-end gap-2"><button onClick={() => setEditing(user)} className="px-3 py-2 rounded-lg bg-slate-100 text-sm font-bold text-slate-600">Edit</button><button onClick={() => remove(user)} disabled={user.id === currentUser.id || Boolean(user.deletedAt)} className="p-2 rounded-lg bg-red-50 text-red-500 disabled:opacity-30"><Trash2 className="w-4 h-4" /></button></div></td></tr>)}</tbody></table></div>
+          <div className="overflow-x-auto overscroll-x-contain"><table className="w-full min-w-[1020px] text-left"><thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-6 py-4">Account</th><th className="px-6 py-4">Position</th><th className="px-6 py-4">Team Lead</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Created</th><th className="px-6 py-4">Last login</th><th className="px-6 py-4 text-right">Actions</th></tr></thead>
+          <tbody className="divide-y divide-slate-100">{users.map((user) => <tr key={user.id} className="hover:bg-slate-50/60"><td className="px-6 py-5"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">{user.role === 'lcvp' ? <Crown className="w-5 h-5" /> : <UserCog className="w-5 h-5" />}</div><div><div className="font-bold">{user.username}</div>{user.id === currentUser.id && <span className="text-xs text-indigo-600">You</span>}</div></div></td><td className="px-6 py-5 font-medium">{ROLE_LABELS[user.role]}</td><td className="px-6 py-5 text-sm text-slate-500">{user.role === 'member' ? user.managerUsername || 'Needs assignment' : '—'}</td><td className="px-6 py-5"><span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${user.isActive && !user.deletedAt ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><span className="w-1.5 h-1.5 rounded-full bg-current" />{user.isActive && !user.deletedAt ? 'Active' : 'Disabled'}</span></td><td className="px-6 py-5 text-sm text-slate-500">{new Date(user.createdAt).toLocaleDateString()}</td><td className="px-6 py-5 text-sm text-slate-500">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</td><td className="px-6 py-5"><div className="flex justify-end gap-2"><button onClick={() => setEditing(user)} className="px-3 py-2 rounded-lg bg-slate-100 text-sm font-bold text-slate-600">Edit</button><button onClick={() => remove(user)} disabled={user.id === currentUser.id || Boolean(user.deletedAt)} className="p-2 rounded-lg bg-red-50 text-red-500 disabled:opacity-30"><Trash2 className="w-4 h-4" /></button></div></td></tr>)}</tbody></table></div>
           {!users.length && <div className="p-16 text-center text-slate-400"><Users className="w-10 h-10 mx-auto mb-3" />No accounts found</div>}
         </div>
       </main>
-      <AnimatePresence>{editing && <UserForm user={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void loadUsers(); }} />}</AnimatePresence>
+      <AnimatePresence>{editing && <UserForm user={editing === 'new' ? undefined : editing} managers={users.filter((candidate) => candidate.role === 'middle_manager' && candidate.isActive && !candidate.deletedAt)} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); void loadUsers(); }} />}</AnimatePresence>
+    </div>
+  );
+}
+
+function TeamPanel({ currentUser, onBack }: { currentUser: SessionUser; onBack: () => void }) {
+  const [members, setMembers] = useState<ManagedUser[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    api<{ members: ManagedUser[] }>('/team')
+      .then((result) => setMembers(result.members))
+      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Unable to load your team'));
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[#fafafa] dark:bg-[#070916] app-mesh text-slate-900 dark:text-slate-100 transition-colors duration-300">
+      <header className="bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800"><div className="max-w-6xl mx-auto min-h-20 px-4 sm:px-6 py-3 flex items-center justify-between gap-3"><Brand /><div className="flex items-center gap-2"><ThemeToggle /><button onClick={onBack} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-indigo-600"><ArrowLeft className="w-4 h-4" /><span className="hidden sm:inline">Back to analyzer</span></button></div></div></header>
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+        <div className="mb-9"><span className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-600">{currentUser.username}'s team</span><h1 className="text-3xl sm:text-4xl font-black tracking-tight mt-2">Your Members</h1><p className="text-slate-500 mt-2">View the Members currently assigned to you.</p></div>
+        {error && <div className="mb-6 p-4 rounded-xl bg-red-50 text-red-600">{error}</div>}
+        {members.length ? (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {members.map((member, index) => (
+              <motion.div key={member.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * .05 }} className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm hover:shadow-lg hover:shadow-indigo-100/50 transition-all">
+                <div className="flex items-center justify-between mb-5"><div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white flex items-center justify-center"><UserCog className="w-5 h-5" /></div><span className={`px-2.5 py-1 rounded-full text-xs font-bold ${member.isActive ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>{member.isActive ? 'Active' : 'Disabled'}</span></div>
+                <h2 className="text-lg font-black">{member.username}</h2>
+                <p className="text-sm text-slate-500 mt-1">Member</p>
+                <div className="mt-5 pt-4 border-t border-slate-100 text-xs text-slate-500">Last login: {member.lastLoginAt ? new Date(member.lastLoginAt).toLocaleString() : 'Never'}</div>
+              </motion.div>
+            ))}
+          </div>
+        ) : !error && <div className="bg-white border border-slate-200 rounded-3xl p-16 text-center text-slate-400"><Network className="w-12 h-12 mx-auto mb-4" /><h2 className="font-bold text-slate-600">No Members assigned yet</h2><p className="text-sm mt-2">An LCVP can assign Members to your team.</p></div>}
+      </main>
     </div>
   );
 }
@@ -178,7 +228,7 @@ export default function AuthApp() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
   const [checking, setChecking] = useState(true);
-  const [adminOpen, setAdminOpen] = useState(false);
+  const [panel, setPanel] = useState<'accounts' | 'team' | null>(null);
 
   useEffect(() => {
     Promise.allSettled([api<{ user: SessionUser }>('/me'), api<{ setupRequired: boolean }>('/setup/status')]).then(([me, setup]) => {
@@ -188,10 +238,11 @@ export default function AuthApp() {
     });
   }, []);
 
-  async function logout() { await api('/logout', { method: 'POST' }); setUser(null); setAdminOpen(false); }
+  async function logout() { await api('/logout', { method: 'POST' }); setUser(null); setPanel(null); }
 
   if (checking) return <div className="min-h-screen bg-[#fafafa] flex items-center justify-center"><Loader2 className="w-8 h-8 text-indigo-600 animate-spin" /></div>;
   if (!user) return <AccessScreen setupRequired={setupRequired} onAuthenticated={(authenticatedUser) => { setUser(authenticatedUser); setSetupRequired(false); }} />;
-  if (adminOpen && user.role === 'admin') return <AdminPanel currentUser={user} onBack={() => setAdminOpen(false)} />;
-  return <Analyzer user={user} onLogout={logout} onOpenAdmin={() => setAdminOpen(true)} />;
+  if (panel === 'accounts' && user.role === 'lcvp') return <AdminPanel currentUser={user} onBack={() => setPanel(null)} />;
+  if (panel === 'team' && user.role === 'middle_manager') return <TeamPanel currentUser={user} onBack={() => setPanel(null)} />;
+  return <Analyzer user={user} onLogout={logout} onOpenAdmin={() => setPanel('accounts')} onOpenTeam={() => setPanel('team')} />;
 }
