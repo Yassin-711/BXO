@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, LockKeyhole, Plus, Trash2, UserCog, Users } from 'lucide-react';
 import Analyzer from './App';
 import Brand from './Brand';
+import ThemeToggle from './ThemeToggle';
 
 type Role = 'admin' | 'user';
 type SessionUser = { id: number; username: string; role: Role };
@@ -57,7 +58,8 @@ function AccessScreen({ setupRequired, onAuthenticated }: { setupRequired: boole
   }
 
   return (
-    <main className="min-h-screen bg-[#fafafa] text-slate-900 grid lg:grid-cols-[1.1fr_0.9fr]">
+    <main className="relative min-h-screen bg-[#fafafa] dark:bg-[#070916] text-slate-900 dark:text-slate-100 grid lg:grid-cols-[1.1fr_0.9fr] transition-colors duration-300">
+      <ThemeToggle className="absolute top-5 right-5 z-20" />
       <section className="hidden lg:flex relative overflow-hidden bg-slate-950 text-white p-16 flex-col justify-between">
         <div className="absolute inset-0 auth-grid opacity-30" />
         <div className="absolute -top-24 -right-24 w-96 h-96 bg-indigo-600/30 blur-3xl rounded-full" />
@@ -72,7 +74,7 @@ function AccessScreen({ setupRequired, onAuthenticated }: { setupRequired: boole
         <p className="relative text-sm text-slate-500">BXO AI · Internal system</p>
       </section>
 
-      <section className="flex items-center justify-center p-6 md:p-12">
+      <section className="flex items-center justify-center p-6 pt-24 md:p-12">
         <motion.div initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} className="w-full max-w-md">
           <div className="lg:hidden mb-12"><Brand /></div>
           <div className="mb-9">
@@ -156,13 +158,13 @@ function AdminPanel({ currentUser, onBack }: { currentUser: SessionUser; onBack:
   }
 
   return (
-    <div className="min-h-screen bg-[#fafafa] text-slate-900">
-      <header className="bg-white border-b border-slate-200"><div className="max-w-6xl mx-auto h-20 px-6 flex items-center justify-between"><Brand /><button onClick={onBack} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-indigo-600"><ArrowLeft className="w-4 h-4" />Back to analyzer</button></div></header>
-      <main className="max-w-6xl mx-auto px-6 py-12">
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-5 mb-9"><div><span className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-600">Administration</span><h1 className="text-4xl font-black tracking-tight mt-2">Account management</h1><p className="text-slate-500 mt-2">Create and control access to the internal workspace.</p></div><button onClick={() => setEditing('new')} className="h-12 px-5 rounded-xl bg-indigo-600 text-white font-bold flex items-center gap-2 shadow-lg shadow-indigo-200"><Plus className="w-5 h-5" />Add account</button></div>
+    <div className="min-h-screen bg-[#fafafa] dark:bg-[#070916] text-slate-900 dark:text-slate-100 transition-colors duration-300">
+      <header className="bg-white dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800"><div className="max-w-6xl mx-auto min-h-20 px-4 sm:px-6 py-3 flex items-center justify-between gap-3"><Brand /><div className="flex items-center gap-2"><ThemeToggle /><button onClick={onBack} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-indigo-600"><ArrowLeft className="w-4 h-4" /><span className="hidden sm:inline">Back to analyzer</span></button></div></div></header>
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-5 mb-9"><div><span className="text-xs font-bold uppercase tracking-[0.2em] text-indigo-600">Administration</span><h1 className="text-3xl sm:text-4xl font-black tracking-tight mt-2">Account management</h1><p className="text-slate-500 mt-2">Create and control access to the internal workspace.</p></div><button onClick={() => setEditing('new')} className="h-12 px-5 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-200"><Plus className="w-5 h-5" />Add account</button></div>
         {error && <div className="mb-6 p-4 rounded-xl bg-red-50 text-red-600">{error}</div>}
         <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
-          <div className="overflow-x-auto"><table className="w-full text-left"><thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-6 py-4">Account</th><th className="px-6 py-4">Role</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Created</th><th className="px-6 py-4">Last login</th><th className="px-6 py-4 text-right">Actions</th></tr></thead>
+          <div className="overflow-x-auto overscroll-x-contain"><table className="w-full min-w-[860px] text-left"><thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-500"><tr><th className="px-6 py-4">Account</th><th className="px-6 py-4">Role</th><th className="px-6 py-4">Status</th><th className="px-6 py-4">Created</th><th className="px-6 py-4">Last login</th><th className="px-6 py-4 text-right">Actions</th></tr></thead>
           <tbody className="divide-y divide-slate-100">{users.map((user) => <tr key={user.id} className="hover:bg-slate-50/60"><td className="px-6 py-5"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center"><UserCog className="w-5 h-5" /></div><div><div className="font-bold">{user.username}</div>{user.id === currentUser.id && <span className="text-xs text-indigo-600">You</span>}</div></div></td><td className="px-6 py-5 capitalize font-medium">{user.role}</td><td className="px-6 py-5"><span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${user.isActive && !user.deletedAt ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}><span className="w-1.5 h-1.5 rounded-full bg-current" />{user.isActive && !user.deletedAt ? 'Active' : 'Disabled'}</span></td><td className="px-6 py-5 text-sm text-slate-500">{new Date(user.createdAt).toLocaleDateString()}</td><td className="px-6 py-5 text-sm text-slate-500">{user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'Never'}</td><td className="px-6 py-5"><div className="flex justify-end gap-2"><button onClick={() => setEditing(user)} className="px-3 py-2 rounded-lg bg-slate-100 text-sm font-bold text-slate-600">Edit</button><button onClick={() => remove(user)} disabled={user.id === currentUser.id || Boolean(user.deletedAt)} className="p-2 rounded-lg bg-red-50 text-red-500 disabled:opacity-30"><Trash2 className="w-4 h-4" /></button></div></td></tr>)}</tbody></table></div>
           {!users.length && <div className="p-16 text-center text-slate-400"><Users className="w-10 h-10 mx-auto mb-3" />No accounts found</div>}
         </div>

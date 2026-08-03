@@ -17,7 +17,7 @@ export default function Brand({ inverse = false, compact = false }: { inverse?: 
   return (
     <div className={`flex items-center ${compact ? 'gap-2.5' : 'gap-3'}`} aria-label="BXO CV Analyzer">
       <BrandMark size={compact ? 'sm' : 'md'} />
-      <span className={`${compact ? 'text-xl' : 'text-2xl'} font-black tracking-[-0.04em] ${inverse ? 'text-white' : 'text-slate-950'}`}>
+      <span className={`${compact ? 'text-xl' : 'text-2xl'} font-black tracking-[-0.04em] ${inverse ? 'text-white' : 'text-slate-950 dark:text-white'}`}>
         BXO<span className="text-indigo-500">.</span>
       </span>
     </div>

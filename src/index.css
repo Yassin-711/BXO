@@ -1,4 +1,23 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+html {
+  color-scheme: light;
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #fafafa;
+  transition: background-color .3s ease, color .3s ease;
+}
+
+.dark body {
+  background: #070916;
+}
 
 @layer components {
   .auth-input {
@@ -39,4 +58,85 @@
 
 .app-mesh {
   background-image: radial-gradient(circle at 15% 5%, rgba(99, 102, 241, .12), transparent 28%), radial-gradient(circle at 85% 32%, rgba(139, 92, 246, .09), transparent 25%);
+}
+
+.dark .app-mesh {
+  background-image: radial-gradient(circle at 15% 5%, rgba(99, 102, 241, .18), transparent 28%), radial-gradient(circle at 85% 32%, rgba(139, 92, 246, .13), transparent 25%);
+}
+
+.theme-toggle {
+  color: #64748b;
+  background: rgba(241, 245, 249, .9);
+  border: 1px solid transparent;
+}
+
+.theme-toggle:hover {
+  color: #4f46e5;
+  background: #eef2ff;
+  border-color: #e0e7ff;
+  transform: translateY(-1px);
+}
+
+.dark .theme-toggle {
+  color: #fbbf24;
+  background: rgba(30, 41, 59, .9);
+  border-color: #334155;
+}
+
+.dark .theme-toggle:hover {
+  color: #fde68a;
+  background: #334155;
+}
+
+.dark .bg-white,
+.dark .bg-white\/90,
+.dark .bg-white\/95,
+.dark .bg-white\/80,
+.dark .bg-white\/75 {
+  background-color: rgba(15, 23, 42, .94);
+}
+
+.dark .bg-slate-50,
+.dark .bg-slate-50\/80,
+.dark .bg-slate-50\/60,
+.dark .bg-slate-100,
+.dark .bg-slate-100\/80 {
+  background-color: rgba(30, 41, 59, .72);
+}
+
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700 {
+  color: #f8fafc;
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500 {
+  color: #94a3b8;
+}
+
+.dark .text-slate-400 {
+  color: #64748b;
+}
+
+.dark .border-slate-100,
+.dark .border-slate-200 {
+  border-color: #334155;
+}
+
+.dark .ring-slate-200\/70 {
+  --tw-ring-color: rgba(51, 65, 85, .7);
+}
+
+.dark .auth-input {
+  background: #0f172a;
+  border-color: #334155;
+  color: #f8fafc;
+}
+
+@media (max-width: 420px) {
+  .auth-input {
+    height: 3.25rem;
+  }
 }

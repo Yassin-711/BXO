@@ -17,6 +17,7 @@ import {
   LockKeyhole
 } from 'lucide-react';
 import Brand from './Brand';
+import ThemeToggle from './ThemeToggle';
 
 interface ScoreBreakdownRow {
   criterionId: string;
@@ -143,13 +144,14 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
   };
 
   return (
-    <div className="min-h-screen bg-[#fafafa] app-mesh text-slate-900 font-sans selection:bg-indigo-100 overflow-hidden">
+    <div className="min-h-screen bg-[#fafafa] dark:bg-[#070916] app-mesh text-slate-900 dark:text-slate-100 font-sans selection:bg-indigo-100 overflow-hidden transition-colors duration-300">
       {/* Header */}
       <header className="border-b border-white/70 bg-white/75 backdrop-blur-xl sticky top-0 z-20 shadow-[0_1px_20px_rgba(15,23,42,.04)]">
         <div className="max-w-6xl mx-auto px-6 h-[72px] flex items-center justify-between">
           <Brand compact />
           <nav className="flex items-center gap-2 text-sm font-medium text-slate-500">
             <span className="hidden sm:inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-100/80 text-slate-600"><span className="w-2 h-2 rounded-full bg-emerald-500" />{user.username}</span>
+            <ThemeToggle />
             {user.role === 'admin' && <button onClick={onOpenAdmin} className="p-2.5 rounded-xl border border-transparent hover:border-indigo-100 hover:bg-indigo-50 hover:text-indigo-600 transition-all" title="Account management"><Users className="w-5 h-5" /></button>}
             <button onClick={onLogout} className="p-2.5 rounded-xl border border-transparent hover:border-red-100 hover:bg-red-50 hover:text-red-500 transition-all" title="Sign out"><LogOut className="w-5 h-5" /></button>
           </nav>
@@ -168,7 +170,7 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
               <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-white border border-indigo-100 text-indigo-700 text-xs font-bold uppercase tracking-[.16em] shadow-sm mb-6">
                 <Sparkles className="w-4 h-4" /> Intelligent talent screening
               </div>
-              <h1 className="text-5xl md:text-6xl lg:text-[4.25rem] font-black tracking-[-0.055em] leading-[.98] mb-7 text-slate-950">
+              <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-[4.25rem] font-black tracking-[-0.055em] leading-[.98] mb-7 text-slate-950 dark:text-white">
                 Better CV decisions,{' '}
                 <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-blue-600 bg-clip-text text-transparent">beautifully simple.</span>
               </h1>
@@ -300,12 +302,12 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                   className="relative bg-white/95 backdrop-blur-xl rounded-[2rem] p-6 sm:p-8 shadow-[0_28px_80px_rgba(79,70,229,.14)] border border-white ring-1 ring-slate-200/70 overflow-hidden"
                 >
                   <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-indigo-500 via-violet-500 to-blue-500" />
-                  <div className="flex items-center justify-between mb-8">
-                    <div>
-                      <h2 className="text-3xl font-bold text-slate-900">{result.name}</h2>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5 mb-8">
+                    <div className="min-w-0">
+                      <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 break-words">{result.name}</h2>
                       <p className="text-indigo-600 font-medium">{result.majors}</p>
                     </div>
-                    <div className="text-right rounded-2xl bg-slate-50 px-4 py-3 border border-slate-100">
+                    <div className="text-left sm:text-right rounded-2xl bg-slate-50 px-4 py-3 border border-slate-100 shrink-0">
                       <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">BXO Score</div>
                       <div className={`text-4xl font-black ${result.vitaeScore > 80 ? 'text-emerald-500' : result.vitaeScore > 50 ? 'text-amber-500' : 'text-slate-900'}`}>
                         {result.vitaeScore}
@@ -344,7 +346,7 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                   )}
 
                   <div className="space-y-6">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid sm:grid-cols-2 gap-4">
                       <div className="p-4 bg-slate-50 rounded-2xl">
                         <div className="flex items-center gap-2 text-slate-400 mb-2">
                           <Languages className="w-4 h-4" />
@@ -383,7 +385,7 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
                       </div>
                     )}
 
-                    <div className="flex gap-4 pt-4">
+                    <div className="flex flex-col sm:flex-row gap-4 pt-4">
                       {result.driveStatus === 'success' ? (
                         <a
                           href={result.driveLink}
