@@ -13,6 +13,8 @@ import {
   Cpu,
   ArrowRight,
   ShieldCheck
+  ,LogOut,
+  Users
 } from 'lucide-react';
 
 interface ScoreBreakdownRow {
@@ -45,7 +47,7 @@ interface AnalysisResult {
   success: boolean;
 }
 
-export default function App() {
+export default function App({ user, onLogout, onOpenAdmin }: { user: { username: string; role: 'admin' | 'user' }; onLogout: () => void; onOpenAdmin: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -145,8 +147,10 @@ export default function App() {
             </div>
             <span className="font-bold text-xl tracking-tight">BXO<span className="text-indigo-600">.</span></span>
           </div>
-          <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-500">
-            <a href="#" className="hover:text-indigo-600 transition-colors">How it works</a>
+          <nav className="flex items-center gap-2 text-sm font-medium text-slate-500">
+            <span className="hidden sm:inline px-3">{user.username}</span>
+            {user.role === 'admin' && <button onClick={onOpenAdmin} className="p-2.5 rounded-xl hover:bg-indigo-50 hover:text-indigo-600 transition-colors" title="Account management"><Users className="w-5 h-5" /></button>}
+            <button onClick={onLogout} className="p-2.5 rounded-xl hover:bg-red-50 hover:text-red-500 transition-colors" title="Sign out"><LogOut className="w-5 h-5" /></button>
           </nav>
         </div>
       </header>

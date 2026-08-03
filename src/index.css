@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+@layer components {
+  .auth-input {
+    @apply w-full h-14 px-4 rounded-2xl bg-white border border-slate-200 text-slate-900 outline-none transition-all placeholder:text-slate-400 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-100;
+  }
+}
+
+.auth-grid {
+  background-image: linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, black, transparent 85%);
+}

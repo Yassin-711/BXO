@@ -4,6 +4,7 @@ import path from "path";
 import multer from "multer";
 import cors from "cors";
 import type { JWT } from "google-auth-library";
+import { initializeAuthDatabase, registerAuthRoutes, requireAuth } from "./auth";
 
 /** Load pdf-parse only when parsing — keeps production baseline RAM low (Render 512MB). */
 async function pdf(data: Buffer) {
@@ -405,6 +406,9 @@ process.on('unhandledRejection', (reason, promise) => {
 
 async function startServer() {
   try {
+    await initializeAuthDatabase();
+    console.log("Authentication database initialized");
+
     const app = express();
     app.use(cors());
     app.use(express.json());
@@ -437,6 +441,10 @@ async function startServer() {
 
     // --- API Routes ---
 
+    const authRouter = express.Router();
+    registerAuthRoutes(authRouter);
+    app.use("/api", authRouter);
+
     app.get("/api/health", (req, res) => {
       console.log("Health check requested");
       res.json({ 
@@ -458,7 +466,7 @@ async function startServer() {
       });
     });
 
-    app.post("/api/analyze", upload.single("cv"), async (req, res) => {
+    app.post("/api/analyze", requireAuth, upload.single("cv"), async (req, res) => {
       console.log("Received analysis request...");
       try {
         if (!req.file) {
