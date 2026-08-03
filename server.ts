@@ -8,6 +8,12 @@ import { initializeAuthDatabase, registerAuthRoutes, requireAuth } from "./auth.
 
 /** Load pdf-parse only when parsing — keeps production baseline RAM low (Render 512MB). */
 async function pdf(data: Buffer) {
+  const canvas = await import("@napi-rs/canvas");
+  const nodeGlobals = globalThis as unknown as Record<string, unknown>;
+  nodeGlobals.DOMMatrix ??= canvas.DOMMatrix;
+  nodeGlobals.ImageData ??= canvas.ImageData;
+  nodeGlobals.Path2D ??= canvas.Path2D;
+
   const { PDFParse } = await import("pdf-parse");
   const parser = new PDFParse({ data });
   const result = await parser.getText();
