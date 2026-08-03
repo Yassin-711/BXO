@@ -404,8 +404,8 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-async function startServer() {
-  try {
+export async function createApp(options: { serveFrontend?: boolean } = {}) {
+    const { serveFrontend = true } = options;
     await initializeAuthDatabase();
     console.log("Authentication database initialized");
 
@@ -699,7 +699,7 @@ async function startServer() {
     });
 
     // --- Vite Middleware (dev only — dynamic import keeps Vite out of production memory) ---
-    if (process.env.NODE_ENV !== "production") {
+    if (serveFrontend && process.env.NODE_ENV !== "production") {
       console.log("Starting Vite in middleware mode...");
       const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
@@ -708,7 +708,7 @@ async function startServer() {
       });
       app.use(vite.middlewares);
       console.log("Vite middleware attached");
-    } else {
+    } else if (serveFrontend) {
       const distPath = path.join(process.cwd(), "dist");
       app.use(express.static(distPath));
       app.get("*", (req, res) => {
@@ -716,6 +716,12 @@ async function startServer() {
       });
     }
 
+    return app;
+}
+
+async function startServer() {
+  try {
+    const app = await createApp();
     app.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
     });
@@ -724,4 +730,6 @@ async function startServer() {
   }
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
