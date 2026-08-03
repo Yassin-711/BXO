@@ -4,7 +4,7 @@ import path from "path";
 import multer from "multer";
 import cors from "cors";
 import type { JWT } from "google-auth-library";
-import { initializeAuthDatabase, registerAuthRoutes, requireAuth } from "./auth.js";
+import { initializeAuthDatabase, recordLeaderboardUpload, registerAuthRoutes, requireAuth } from "./auth.js";
 
 /** Load pdf-parse only when parsing — keeps production baseline RAM low (Render 512MB). */
 async function pdf(data: Buffer) {
@@ -688,6 +688,10 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
           sheetStatus = "missing_credentials";
         }
 
+        const workflowSucceeded = driveStatus === "success" && sheetStatus === "success";
+        if (workflowSucceeded && req.authUser?.role !== "lcvp") {
+          await recordLeaderboardUpload({ userId: req.authUser!.id });
+        }
         console.log("Analysis complete");
         res.json({
           ...analysis,

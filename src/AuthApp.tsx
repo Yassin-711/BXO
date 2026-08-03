@@ -4,10 +4,11 @@ import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, LockKeyhole, Plus, Trash2
 import Analyzer from './App';
 import Brand from './Brand';
 import ThemeToggle from './ThemeToggle';
+import Leaderboard from './Leaderboard';
 
 type Role = 'lcvp' | 'middle_manager' | 'member';
 type SessionUser = { id: number; username: string; role: Role };
-type ManagedUser = SessionUser & { managerId: number | null; managerUsername?: string | null; isActive: boolean; createdAt: string; lastLoginAt: string | null; deletedAt?: string | null };
+type ManagedUser = SessionUser & { managerId: number | null; managerUsername?: string | null; teamName?: string | null; isActive: boolean; createdAt: string; lastLoginAt: string | null; deletedAt?: string | null };
 
 const ROLE_LABELS: Record<Role, string> = {
   lcvp: 'LCVP',
@@ -115,13 +116,14 @@ function UserForm({ user, managers, onClose, onSaved }: { user?: ManagedUser; ma
   const [role, setRole] = useState<Role>(user?.role ?? 'member');
   const [managerId, setManagerId] = useState(user?.managerId?.toString() ?? '');
   const [isActive, setIsActive] = useState(user?.isActive ?? true);
+  const [teamName, setTeamName] = useState(user?.teamName ?? (user?.role === 'middle_manager' ? `Team ${user.username}` : ''));
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault(); setLoading(true); setError('');
     try {
-      await api(user ? `/users/${user.id}` : '/users', { method: user ? 'PATCH' : 'POST', body: JSON.stringify({ username, password: password || undefined, role, managerId: role === 'member' ? Number(managerId) : null, isActive }) });
+      await api(user ? `/users/${user.id}` : '/users', { method: user ? 'PATCH' : 'POST', body: JSON.stringify({ username, password: password || undefined, role, managerId: role === 'member' ? Number(managerId) : null, teamName: role === 'middle_manager' ? teamName : undefined, isActive }) });
       onSaved();
     } catch (saveError) { setError(saveError instanceof Error ? saveError.message : 'Unable to save account'); }
     finally { setLoading(false); }
@@ -149,6 +151,7 @@ function UserForm({ user, managers, onClose, onSaved }: { user?: ManagedUser; ma
               {!managers.length && <p className="mt-2 text-xs text-amber-600">Create an active Middle Manager before adding Members.</p>}
             </div>
           )}
+          {role === 'middle_manager' && <div><label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">Team name</label><input className="auth-input" value={teamName} onChange={(event) => setTeamName(event.target.value)} placeholder={`Team ${username || 'name'}`} maxLength={80} required /></div>}
           {error && <div className="p-3 rounded-xl bg-red-50 text-red-600 text-sm">{error}</div>}
           <div className="flex gap-3 pt-3"><button type="button" onClick={onClose} className="flex-1 h-12 rounded-xl bg-slate-100 font-bold text-slate-600">Cancel</button><button disabled={loading} className="flex-1 h-12 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center gap-2">{loading && <Loader2 className="w-4 h-4 animate-spin" />}Save account</button></div>
         </div>
@@ -228,7 +231,7 @@ export default function AuthApp() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
   const [checking, setChecking] = useState(true);
-  const [panel, setPanel] = useState<'accounts' | 'team' | null>(null);
+  const [panel, setPanel] = useState<'accounts' | 'team' | 'leaderboard' | null>(null);
 
   useEffect(() => {
     Promise.allSettled([api<{ user: SessionUser }>('/me'), api<{ setupRequired: boolean }>('/setup/status')]).then(([me, setup]) => {
@@ -244,5 +247,6 @@ export default function AuthApp() {
   if (!user) return <AccessScreen setupRequired={setupRequired} onAuthenticated={(authenticatedUser) => { setUser(authenticatedUser); setSetupRequired(false); }} />;
   if (panel === 'accounts' && user.role === 'lcvp') return <AdminPanel currentUser={user} onBack={() => setPanel(null)} />;
   if (panel === 'team' && user.role === 'middle_manager') return <TeamPanel currentUser={user} onBack={() => setPanel(null)} />;
-  return <Analyzer user={user} onLogout={logout} onOpenAdmin={() => setPanel('accounts')} onOpenTeam={() => setPanel('team')} />;
+  if (panel === 'leaderboard') return <Leaderboard user={user} onBack={() => setPanel(null)} />;
+  return <Analyzer user={user} onLogout={logout} onOpenAdmin={() => setPanel('accounts')} onOpenTeam={() => setPanel('team')} onOpenLeaderboard={() => setPanel('leaderboard')} />;
 }

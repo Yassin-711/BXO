@@ -10,6 +10,10 @@ type AuthUser = {
   role: Role;
 };
 
+type LeaderboardUpload = {
+  userId: number;
+};
+
 declare global {
   namespace Express {
     interface Request {
@@ -56,17 +60,41 @@ export async function initializeAuthDatabase(): Promise<void> {
     )
   `);
   await db.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS manager_id BIGINT REFERENCES app_users(id) ON DELETE RESTRICT");
+  await db.query("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS team_name VARCHAR(80)");
   await db.query("ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check");
   await db.query("UPDATE app_users SET role = 'lcvp' WHERE role = 'admin'");
   await db.query("UPDATE app_users SET role = 'member' WHERE role = 'user'");
   await db.query("ALTER TABLE app_users ADD CONSTRAINT app_users_role_check CHECK (role IN ('lcvp', 'middle_manager', 'member'))");
   await db.query("CREATE INDEX IF NOT EXISTS app_users_active_idx ON app_users (is_active)");
   await db.query("CREATE INDEX IF NOT EXISTS app_users_manager_idx ON app_users (manager_id)");
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS leaderboard_uploads (
+      id BIGSERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE RESTRICT,
+      role_at_upload VARCHAR(16) NOT NULL CHECK (role_at_upload IN ('middle_manager', 'member')),
+      team_manager_id BIGINT NOT NULL REFERENCES app_users(id) ON DELETE RESTRICT,
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query("CREATE INDEX IF NOT EXISTS leaderboard_uploads_user_date_idx ON leaderboard_uploads (user_id, uploaded_at)");
+  await db.query("CREATE INDEX IF NOT EXISTS leaderboard_uploads_team_date_idx ON leaderboard_uploads (team_manager_id, uploaded_at)");
   await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK");
     throw error;
   }
+}
+
+export async function recordLeaderboardUpload({ userId }: LeaderboardUpload): Promise<void> {
+  const result = await getPool().query(
+    `INSERT INTO leaderboard_uploads (user_id, role_at_upload, team_manager_id)
+     SELECT id, role, CASE WHEN role = 'middle_manager' THEN id ELSE manager_id END
+     FROM app_users
+     WHERE id = $1 AND role IN ('middle_manager', 'member')
+       AND CASE WHEN role = 'middle_manager' THEN id ELSE manager_id END IS NOT NULL`,
+    [userId],
+  );
+  if (!result.rowCount) console.warn(`Leaderboard upload was not recorded for user ${userId}`);
 }
 
 function parseRole(value: unknown): Role | null {
@@ -276,7 +304,7 @@ export function registerAuthRoutes(router: Router): void {
   router.get("/users", requireAuth, requireLcvp, async (_req, res, next) => {
     try {
       const result = await getPool().query(
-        `SELECT u.id, u.username, u.role, u.manager_id AS "managerId", m.username AS "managerUsername",
+        `SELECT u.id, u.username, u.role, u.manager_id AS "managerId", m.username AS "managerUsername", u.team_name AS "teamName",
                 u.is_active AS "isActive", u.created_at AS "createdAt",
                 u.last_login_at AS "lastLoginAt", u.deleted_at AS "deletedAt"
          FROM app_users u
@@ -305,6 +333,61 @@ export function registerAuthRoutes(router: Router): void {
     }
   });
 
+  router.get("/leaderboards", requireAuth, async (req, res, next) => {
+    try {
+      const from = typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
+      const to = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
+      if ((from && !to) || (!from && to)) return res.status(400).json({ error: "Choose both start and end dates." });
+      if (from && to && from > to) return res.status(400).json({ error: "Start date must be before end date." });
+      const params = from && to ? [from, to] : [];
+      const dateFilter = from && to ? "AND lu.uploaded_at >= $1::date AND lu.uploaded_at < ($2::date + INTERVAL '1 day')" : "";
+      const people = await getPool().query(
+        `SELECT u.id, u.username, u.role, u.is_active AS "isActive",
+                COUNT(lu.id)::int AS uploads, MAX(lu.uploaded_at) AS "lastUploadAt"
+         FROM app_users u
+         LEFT JOIN leaderboard_uploads lu ON lu.user_id = u.id ${dateFilter}
+         WHERE u.role IN ('middle_manager', 'member')
+         GROUP BY u.id
+         ORDER BY COUNT(lu.id) DESC, MAX(lu.uploaded_at) ASC NULLS LAST, u.created_at ASC`, params,
+      );
+      const teams = await getPool().query(
+        `SELECT manager.id, COALESCE(manager.team_name, 'Team ' || manager.username) AS "teamName",
+                manager.username AS "managerUsername", manager.is_active AS "isActive",
+                COUNT(lu.id)::int AS uploads, MAX(lu.uploaded_at) AS "lastUploadAt"
+         FROM app_users manager
+         LEFT JOIN leaderboard_uploads lu ON lu.team_manager_id = manager.id ${dateFilter}
+         WHERE manager.role = 'middle_manager'
+         GROUP BY manager.id
+         ORDER BY COUNT(lu.id) DESC, MAX(lu.uploaded_at) ASC NULLS LAST, manager.created_at ASC`, params,
+      );
+      const teamMembers = await getPool().query(
+        `SELECT manager.id AS "teamId", COALESCE(manager.team_name, 'Team ' || manager.username) AS "teamName",
+                u.id, u.username, u.is_active AS "isActive", COUNT(lu.id)::int AS uploads,
+                MAX(lu.uploaded_at) AS "lastUploadAt"
+         FROM app_users manager
+         JOIN app_users u ON u.role = 'member'
+         LEFT JOIN leaderboard_uploads lu ON lu.user_id = u.id AND lu.team_manager_id = manager.id ${dateFilter}
+         WHERE manager.role = 'middle_manager'
+           AND (u.manager_id = manager.id OR lu.id IS NOT NULL)
+         GROUP BY manager.id, u.id
+         ORDER BY manager.id, COUNT(lu.id) DESC, MAX(lu.uploaded_at) ASC NULLS LAST, u.created_at ASC`, params,
+      );
+      res.json({
+        people: people.rows.map((row) => ({ ...row, id: Number(row.id) })),
+        teams: teams.rows.map((row) => ({ ...row, id: Number(row.id) })),
+        teamMembers: teamMembers.rows.map((row) => ({ ...row, id: Number(row.id), teamId: Number(row.teamId) })),
+        range: from && to ? { from, to } : null,
+      });
+    } catch (error) { next(error); }
+  });
+
+  router.delete("/leaderboards/uploads", requireAuth, requireLcvp, async (_req, res, next) => {
+    try {
+      const result = await getPool().query("DELETE FROM leaderboard_uploads");
+      res.json({ reset: true, deletedUploads: result.rowCount ?? 0 });
+    } catch (error) { next(error); }
+  });
+
   router.post("/users", requireAuth, requireLcvp, async (req, res, next) => {
     try {
       const username = normalizeUsername(req.body.username);
@@ -317,11 +400,16 @@ export function registerAuthRoutes(router: Router): void {
         const managerError = await validateManager(managerId);
         if (managerError) return res.status(400).json({ error: managerError });
       }
+      const teamName = role === "middle_manager" ? (String(req.body.teamName ?? "").trim() || `Team ${username}`).slice(0, 80) : null;
+      if (teamName) {
+        const duplicate = await getPool().query("SELECT 1 FROM app_users WHERE role = 'middle_manager' AND LOWER(COALESCE(team_name, 'Team ' || username)) = LOWER($1)", [teamName]);
+        if (duplicate.rowCount) return res.status(409).json({ error: "Team names must be unique." });
+      }
       const passwordHash = await hashPassword(password);
       const result = await getPool().query(
-        `INSERT INTO app_users (username, password_hash, role, manager_id) VALUES ($1, $2, $3, $4)
-         RETURNING id, username, role, manager_id AS "managerId", is_active AS "isActive", created_at AS "createdAt", last_login_at AS "lastLoginAt"`,
-        [username, passwordHash, role, managerId],
+        `INSERT INTO app_users (username, password_hash, role, manager_id, team_name) VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, username, role, manager_id AS "managerId", team_name AS "teamName", is_active AS "isActive", created_at AS "createdAt", last_login_at AS "lastLoginAt"`,
+        [username, passwordHash, role, managerId, teamName],
       );
       res.status(201).json({ user: { ...result.rows[0], id: Number(result.rows[0].id) } });
     } catch (error: any) {
@@ -334,7 +422,7 @@ export function registerAuthRoutes(router: Router): void {
     try {
       const id = Number(req.params.id);
       if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid account ID" });
-      const existing = await getPool().query("SELECT id, username, role, is_active, manager_id FROM app_users WHERE id = $1", [id]);
+      const existing = await getPool().query("SELECT id, username, role, is_active, manager_id, team_name FROM app_users WHERE id = $1", [id]);
       if (!existing.rowCount) return res.status(404).json({ error: "Account not found" });
       const username = req.body.username === undefined ? existing.rows[0].username : normalizeUsername(req.body.username);
       const role = req.body.role === undefined ? parseRole(existing.rows[0].role)! : parseRole(req.body.role);
@@ -361,12 +449,18 @@ export function registerAuthRoutes(router: Router): void {
       const validationError = validateCredentials(username, password || "12345678");
       if (validationError) return res.status(400).json({ error: validationError });
       const passwordHash = password ? await hashPassword(password) : null;
+      const requestedTeamName = req.body.teamName === undefined ? existing.rows[0].team_name : String(req.body.teamName).trim();
+      const teamName = role === "middle_manager" ? (requestedTeamName || `Team ${username}`).slice(0, 80) : null;
+      if (role === "middle_manager") {
+        const duplicate = await getPool().query("SELECT 1 FROM app_users WHERE role = 'middle_manager' AND LOWER(COALESCE(team_name, 'Team ' || username)) = LOWER($1) AND id <> $2", [teamName, id]);
+        if (duplicate.rowCount) return res.status(409).json({ error: "Team names must be unique." });
+      }
       const result = await getPool().query(
         `UPDATE app_users SET username = $1, role = $2, is_active = $3, deleted_at = CASE WHEN $3 THEN NULL ELSE deleted_at END,
-           password_hash = COALESCE($4, password_hash), manager_id = $5
-         WHERE id = $6
-         RETURNING id, username, role, manager_id AS "managerId", is_active AS "isActive", created_at AS "createdAt", last_login_at AS "lastLoginAt"`,
-        [username, role, isActive, passwordHash, managerId, id],
+           password_hash = COALESCE($4, password_hash), manager_id = $5, team_name = $6
+         WHERE id = $7
+         RETURNING id, username, role, manager_id AS "managerId", team_name AS "teamName", is_active AS "isActive", created_at AS "createdAt", last_login_at AS "lastLoginAt"`,
+        [username, role, isActive, passwordHash, managerId, teamName, id],
       );
       res.json({ user: { ...result.rows[0], id: Number(result.rows[0].id) } });
     } catch (error: any) {

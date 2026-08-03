@@ -140,3 +140,18 @@ body {
     height: 3.25rem;
   }
 }
+
+.leaderboard-arena {
+  background-color: #050713;
+  background-image: radial-gradient(circle at 12% 8%, rgba(79,70,229,.24), transparent 25%), radial-gradient(circle at 88% 18%, rgba(217,70,239,.17), transparent 24%), linear-gradient(rgba(99,102,241,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,.035) 1px, transparent 1px);
+  background-size: auto, auto, 46px 46px, 46px 46px;
+}
+
+.neon-text { color: #a5f3fc; text-shadow: 0 0 22px rgba(34,211,238,.48), 0 0 50px rgba(139,92,246,.35); }
+.leaderboard-icon { @apply h-11 px-3 rounded-xl flex items-center gap-2 border border-white/10 bg-white/5 text-slate-300 hover:text-cyan-300 hover:border-cyan-300/30 transition-all; }
+.leaderboard-tab { @apply min-h-11 px-3 sm:px-4 rounded-xl flex items-center justify-center gap-2 text-xs sm:text-sm font-bold text-slate-500 hover:bg-white/5 hover:text-slate-200 transition-all; }
+.leaderboard-tab-active { @apply bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-600/20; }
+.leaderboard-action { @apply h-11 px-3 rounded-xl flex items-center gap-2 bg-indigo-500/10 border border-indigo-400/20 text-xs font-bold text-indigo-200 hover:bg-indigo-500/20 disabled:opacity-30 transition-all; }
+.leaderboard-reset { @apply h-11 px-3 rounded-xl border border-red-400/20 bg-red-500/10 text-xs font-bold text-red-300 hover:bg-red-500/20 transition-all; }
+.date-field { @apply flex flex-col gap-1 text-[10px] uppercase tracking-wider text-slate-500; }
+.date-field input { @apply h-11 rounded-xl border border-white/10 bg-slate-900 px-3 text-xs text-slate-200 outline-none focus:border-cyan-400/40; color-scheme: dark; }
