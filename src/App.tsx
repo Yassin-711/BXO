@@ -7,7 +7,6 @@ import {
   AlertCircle,
   Loader2,
   ExternalLink,
-  Award,
   BookOpen,
   Languages,
   Cpu,
@@ -178,31 +177,7 @@ export default function App({ user, onLogout, onOpenAdmin }: { user: { username:
               </p>
             </motion.div>
 
-            <div className="grid sm:grid-cols-3 lg:grid-cols-1 gap-3">
-              {[
-                { icon: Cpu, text: "AI-Powered Extraction", sub: "OpenRouter · Qwen Plus" },
-                { icon: Award, text: "BXO Scoring System", sub: "Proprietary ranking algorithm" },
-                { icon: CheckCircle2, text: "Google Workspace Sync", sub: "Drive & Sheets integration" }
-              ].map((item, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: 0.2 + i * 0.1 }}
-                  className="group flex items-start gap-4 p-4 rounded-2xl bg-white/55 hover:bg-white hover:shadow-lg hover:shadow-indigo-100/50 transition-all border border-white hover:border-indigo-100"
-                >
-                  <div className="p-2.5 bg-gradient-to-br from-indigo-50 to-violet-100 rounded-xl text-indigo-600 group-hover:scale-105 transition-transform">
-                    <item.icon className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="font-semibold text-slate-900">{item.text}</h3>
-                    <p className="text-sm text-slate-500">{item.sub}</p>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-
-            <p className="text-xs font-semibold uppercase tracking-[.14em] text-slate-400 pt-1">
+            <p className="text-xs font-semibold uppercase tracking-[.14em] text-slate-400">
               Crafted by Yassin Elhawash · LCVP BXO
             </p>
           </div>
