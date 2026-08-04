@@ -3,8 +3,9 @@ import express from "express";
 import path from "path";
 import multer from "multer";
 import cors from "cors";
+import crypto from "crypto";
 import type { JWT } from "google-auth-library";
-import { initializeAuthDatabase, recordLeaderboardUpload, registerAuthRoutes, requireAuth } from "./auth.js";
+import { claimCvUpload, completeCvUploadClaim, completeMigration, findCvDuplicate, hasCompletedMigration, initializeAuthDatabase, recordLeaderboardUpload, registerAuthRoutes, registerHistoricalCv, releaseCvUploadClaim, requireAuth, type CvFingerprint } from "./auth.js";
 
 /** Load pdf-parse only when parsing — keeps production baseline RAM low (Render 512MB). */
 async function pdf(data: Buffer) {
@@ -56,7 +57,7 @@ ${rubricBlock}
 8. **evidence:** one short quote or tight paraphrase from the CV for that category; if nothing applies use "Not stated in CV".
 9. **vitaeScore** must equal the sum of all **earned** (same integer sum you use in breakdown).
 10. Do not invent employers, degrees, or skills not supported by the text.
-11. Extract **name**, **majors**, **languages** (summary line), **skills** (comma-separated). **reasoning** = 2–3 sentences aligned with the breakdown totals.
+11. Extract **name**, **email**, **phone**, **majors**, **languages** (summary line), **skills** (comma-separated). Use an empty string when email or phone is not stated. **reasoning** = 2–3 sentences aligned with the breakdown totals.
 
 ## CV plain text
 ${cvText}`;
@@ -111,6 +112,9 @@ function normalizeVitaeAnalysis(analysis: Record<string, unknown>): Record<strin
 
   return {
     ...analysis,
+    name: String(analysis.name ?? "").trim(),
+    email: String(analysis.email ?? "").trim().toLowerCase(),
+    phone: String(analysis.phone ?? "").trim(),
     breakdown,
     vitaeScore,
   };
@@ -474,6 +478,7 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
 
     app.post("/api/analyze", requireAuth, upload.single("cv"), async (req, res) => {
       console.log("Received analysis request...");
+      let cvClaimId: number | null = null;
       try {
         if (!req.file) {
           console.log("No file uploaded");
@@ -485,6 +490,13 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
         if (req.file.mimetype !== "application/pdf") {
           console.log("Invalid mimetype:", req.file.mimetype);
           return res.status(400).json({ error: "Only PDF files are allowed" });
+        }
+
+        const fileHash = sha256(req.file.buffer);
+        const jwt = await createGoogleServiceAccountJwt();
+        await ensureHistoricalCvRegistry(jwt, SHEET_ID);
+        if (await findCvDuplicate({ fileHash })) {
+          return res.status(409).json({ error: "This CV has already been uploaded. Duplicate submissions are not allowed." });
         }
 
         // 1. Parse PDF Text
@@ -503,6 +515,8 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
           console.log("PDF text too short or empty");
           return res.status(400).json({ error: "The PDF appears to be empty or unreadable (e.g., it might be a scanned image without OCR)." });
         }
+        const extractedContact = extractContactDetails(cvText);
+        const contentHash = sha256(normalizeCvText(cvText));
 
         // 2. Analyze with OpenRouter (default: Qwen Plus) — fetch only, no Gemini SDK
         console.log("Calling OpenRouter...");
@@ -543,6 +557,18 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
           throw lastError || new Error("Failed to analyze CV after retries");
         }
 
+        const fingerprint: CvFingerprint = {
+          fileHash,
+          contentHash,
+          normalizedName: normalizeCandidateName(analysis.name),
+          email: String(analysis.email || extractedContact.email).trim().toLowerCase(),
+          phone: normalizePhone(analysis.phone || extractedContact.phone),
+        };
+        cvClaimId = await claimCvUpload(fingerprint, req.authUser!.id);
+        if (!cvClaimId) {
+          return res.status(409).json({ error: "This candidate CV has already been uploaded. Updated CVs are accepted only when their content has changed." });
+        }
+
         // 3. Upload to Google Drive (folder MUST be on a Shared Drive — service accounts have no My Drive quota)
         let driveLink = "Not Configured";
         let driveStatus = "skipped";
@@ -550,8 +576,8 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
         let sheetsSynced = false;
         let sheetStatus = "skipped";
 
-        const jwt = await createGoogleServiceAccountJwt();
-        const sheetRange = "'Table 1'!A:F";
+        const sheetRange = "'Table 1'!A:H";
+        let uploadedDriveFileId = "";
 
         if (!jwt) {
           console.warn("Skipping Google Drive/Sheets: Missing Service Account credentials.");
@@ -578,6 +604,7 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
                 req.file.originalname,
                 req.file.buffer
               );
+              uploadedDriveFileId = fileId;
               console.log(`Upload success. File ID: ${fileId}`);
 
               driveLink = `https://drive.google.com/file/d/${fileId}/view`;
@@ -591,6 +618,8 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
                 analysis.skills,
                 analysis.vitaeScore,
                 driveLink,
+                fingerprint.email,
+                fingerprint.phone,
               ];
 
               if (SHEET_ID) {
@@ -669,6 +698,8 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
               analysis.skills,
               analysis.vitaeScore,
               driveLink,
+              fingerprint.email,
+              fingerprint.phone,
             ]);
             sheetStatus = "success";
             console.log("Sheets sync successful");
@@ -689,6 +720,13 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
         }
 
         const workflowSucceeded = driveStatus === "success" && sheetStatus === "success";
+        if (workflowSucceeded) {
+          await completeCvUploadClaim(cvClaimId, uploadedDriveFileId);
+          cvClaimId = null;
+        } else {
+          await releaseCvUploadClaim(cvClaimId);
+          cvClaimId = null;
+        }
         if (workflowSucceeded && req.authUser?.role !== "lcvp") {
           await recordLeaderboardUpload({ userId: req.authUser!.id });
         }
@@ -703,6 +741,7 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
         });
 
       } catch (error: any) {
+        if (cvClaimId) await releaseCvUploadClaim(cvClaimId).catch((releaseError) => console.error("Could not release CV duplicate claim:", releaseError));
         console.error("Analysis Error:", error);
         res.status(500).json({ error: error.message || "Internal Server Error" });
       }
@@ -727,6 +766,89 @@ export async function createApp(options: { serveFrontend?: boolean } = {}) {
     }
 
     return app;
+}
+
+async function sheetsReadRows(jwt: JWT, spreadsheetId: string, rangeA1: string): Promise<unknown[][]> {
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(rangeA1)}`;
+  const { data } = await jwt.request<{ values?: unknown[][] }>({ url, method: "GET" });
+  return data.values ?? [];
+}
+
+function driveFileIdFromLink(value: unknown): string {
+  const text = String(value ?? "");
+  return text.match(/\/d\/([\w-]+)/)?.[1] ?? text.match(/[?&]id=([\w-]+)/)?.[1] ?? "";
+}
+
+async function driveDownloadPdf(jwt: JWT, fileId: string): Promise<Buffer> {
+  const { data } = await jwt.request<ArrayBuffer>({
+    url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`,
+    method: "GET",
+    responseType: "arraybuffer",
+  });
+  return Buffer.from(data);
+}
+
+let historicalBackfillPromise: Promise<void> | null = null;
+
+async function ensureHistoricalCvRegistry(jwt: JWT | null, sheetId: string): Promise<void> {
+  const migrationKey = "cv_registry_from_google_v1";
+  if (!jwt || !sheetId || await hasCompletedMigration(migrationKey)) return;
+  if (historicalBackfillPromise) return historicalBackfillPromise;
+  historicalBackfillPromise = (async () => {
+    const rows = await sheetsReadRows(jwt, sheetId, "'Table 1'!A:H");
+    const candidates = rows.filter((row) => driveFileIdFromLink(row[5]));
+    let failed = 0;
+    for (let index = 0; index < candidates.length; index += 3) {
+      await Promise.all(candidates.slice(index, index + 3).map(async (row) => {
+        const driveFileId = driveFileIdFromLink(row[5]);
+        try {
+          const buffer = await driveDownloadPdf(jwt, driveFileId);
+          const parsed = await pdf(buffer);
+          const contact = extractContactDetails(parsed.text);
+          await registerHistoricalCv({
+            fileHash: sha256(buffer),
+            contentHash: sha256(normalizeCvText(parsed.text)),
+            normalizedName: normalizeCandidateName(row[0]),
+            email: String(row[6] ?? contact.email).trim().toLowerCase(),
+            phone: normalizePhone(row[7] ?? contact.phone),
+          }, driveFileId);
+        } catch (error) {
+          failed++;
+          console.warn(`Could not backfill historical CV ${driveFileId}:`, error instanceof Error ? error.message : error);
+        }
+      }));
+    }
+    if (failed === 0) {
+      await completeMigration(migrationKey);
+      console.log(`Historical CV duplicate registry initialized with ${candidates.length} Drive files.`);
+    } else {
+      console.warn(`Historical CV registry backfill will retry; ${failed} file(s) failed.`);
+    }
+  })().finally(() => { historicalBackfillPromise = null; });
+  return historicalBackfillPromise;
+}
+
+function sha256(value: Buffer | string): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeCvText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").replace(/[^\p{L}\p{N}@+._ -]/gu, "").trim();
+}
+
+function normalizeCandidateName(value: unknown): string {
+  return String(value ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function normalizePhone(value: unknown): string {
+  return String(value ?? "").replace(/\D/g, "");
+}
+
+function extractContactDetails(text: string): { email: string; phone: string } {
+  const email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase() ?? "";
+  const candidates = text.match(/(?:\+?\d[\d\s().-]{7,}\d)/g) ?? [];
+  const phone = candidates.map(normalizePhone).find((value) => value.length >= 8 && value.length <= 15) ?? "";
+  return { email, phone };
 }
 
 async function startServer() {

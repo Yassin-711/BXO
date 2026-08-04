@@ -14,6 +14,14 @@ type LeaderboardUpload = {
   userId: number;
 };
 
+export type CvFingerprint = {
+  fileHash: string;
+  contentHash: string;
+  normalizedName: string;
+  email: string;
+  phone: string;
+};
+
 declare global {
   namespace Express {
     interface Request {
@@ -78,11 +86,85 @@ export async function initializeAuthDatabase(): Promise<void> {
   `);
   await db.query("CREATE INDEX IF NOT EXISTS leaderboard_uploads_user_date_idx ON leaderboard_uploads (user_id, uploaded_at)");
   await db.query("CREATE INDEX IF NOT EXISTS leaderboard_uploads_team_date_idx ON leaderboard_uploads (team_manager_id, uploaded_at)");
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS cv_upload_registry (
+      id BIGSERIAL PRIMARY KEY,
+      file_hash CHAR(64) NOT NULL UNIQUE,
+      content_hash CHAR(64) NOT NULL,
+      normalized_name TEXT,
+      email TEXT,
+      phone TEXT,
+      uploaded_by BIGINT REFERENCES app_users(id) ON DELETE SET NULL,
+      drive_file_id TEXT UNIQUE,
+      status VARCHAR(16) NOT NULL DEFAULT 'complete' CHECK (status IN ('pending', 'complete')),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.query("CREATE INDEX IF NOT EXISTS cv_upload_registry_identity_idx ON cv_upload_registry (normalized_name, email, phone, content_hash)");
+  await db.query(`DELETE FROM cv_upload_registry newer USING cv_upload_registry older
+                  WHERE newer.id > older.id AND newer.normalized_name = older.normalized_name
+                    AND newer.email = older.email AND newer.phone = older.phone AND newer.content_hash = older.content_hash`);
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS cv_upload_registry_identity_unique
+                  ON cv_upload_registry (normalized_name, email, phone, content_hash)
+                  WHERE normalized_name IS NOT NULL AND email IS NOT NULL AND phone IS NOT NULL`);
+  await db.query("CREATE TABLE IF NOT EXISTS app_migrations (key TEXT PRIMARY KEY, completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
   await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK");
     throw error;
   }
+}
+
+export async function hasCompletedMigration(key: string): Promise<boolean> {
+  const result = await getPool().query("SELECT 1 FROM app_migrations WHERE key = $1", [key]);
+  return Boolean(result.rowCount);
+}
+
+export async function completeMigration(key: string): Promise<void> {
+  await getPool().query("INSERT INTO app_migrations (key) VALUES ($1) ON CONFLICT (key) DO NOTHING", [key]);
+}
+
+export async function registerHistoricalCv(fingerprint: CvFingerprint, driveFileId: string): Promise<void> {
+  await getPool().query(
+    `INSERT INTO cv_upload_registry (file_hash, content_hash, normalized_name, email, phone, drive_file_id, status)
+     VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($5, ''), $6, 'complete') ON CONFLICT DO NOTHING`,
+    [fingerprint.fileHash, fingerprint.contentHash, fingerprint.normalizedName, fingerprint.email, fingerprint.phone, driveFileId],
+  );
+}
+
+export async function findCvDuplicate(fingerprint: Partial<CvFingerprint>): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM cv_upload_registry
+     WHERE file_hash = $1
+        OR ($2 <> '' AND $3 <> '' AND $4 <> '' AND $5 <> '' AND normalized_name = $2 AND email = $3 AND phone = $4 AND content_hash = $5)
+     LIMIT 1`,
+    [fingerprint.fileHash ?? "", fingerprint.normalizedName ?? "", fingerprint.email ?? "", fingerprint.phone ?? "", fingerprint.contentHash ?? ""],
+  );
+  return Boolean(result.rowCount);
+}
+
+export async function claimCvUpload(fingerprint: CvFingerprint, userId: number): Promise<number | null> {
+  await getPool().query("DELETE FROM cv_upload_registry WHERE status = 'pending' AND created_at < NOW() - INTERVAL '30 minutes'");
+  try {
+    if (await findCvDuplicate(fingerprint)) return null;
+    const result = await getPool().query(
+      `INSERT INTO cv_upload_registry (file_hash, content_hash, normalized_name, email, phone, uploaded_by, status)
+       VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($5, ''), $6, 'pending') RETURNING id`,
+      [fingerprint.fileHash, fingerprint.contentHash, fingerprint.normalizedName, fingerprint.email, fingerprint.phone, userId],
+    );
+    return Number(result.rows[0].id);
+  } catch (error: any) {
+    if (error?.code === "23505") return null;
+    throw error;
+  }
+}
+
+export async function completeCvUploadClaim(id: number, driveFileId: string): Promise<void> {
+  await getPool().query("UPDATE cv_upload_registry SET status = 'complete', drive_file_id = $1 WHERE id = $2", [driveFileId, id]);
+}
+
+export async function releaseCvUploadClaim(id: number): Promise<void> {
+  await getPool().query("DELETE FROM cv_upload_registry WHERE id = $1 AND status = 'pending'", [id]);
 }
 
 export async function recordLeaderboardUpload({ userId }: LeaderboardUpload): Promise<void> {
