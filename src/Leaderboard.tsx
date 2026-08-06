@@ -22,21 +22,22 @@ async function getData(from?: string, to?: string): Promise<LeaderboardData> {
   return data;
 }
 
-function Podium({ rows, label }: { rows: Array<Person | Team>; label: (row: Person | Team) => string }) {
+function Podium({ rows, label, subtitle }: { rows: Array<Person | Team>; label: (row: Person | Team) => string; subtitle?: (row: Person | Team) => string | null }) {
   return <div className="grid sm:grid-cols-3 gap-3 mb-7">
     {rows.slice(0, 3).map((row, index) => <motion.div key={row.id} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * .08 }} className={`relative overflow-hidden rounded-3xl border border-white/10 bg-slate-900/70 p-5 shadow-2xl ${glows[index]}`}>
       <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${medals[index]}`} />
       <div className="flex items-center justify-between"><div className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${medals[index]} text-slate-950 flex items-center justify-center shadow-lg`}><Medal className="w-6 h-6" /></div><span className="text-4xl font-black text-white/10">#{index + 1}</span></div>
       <h3 className="mt-5 truncate text-lg font-black text-white">{label(row)}</h3>
+      {subtitle?.(row) && <p className="mt-1 truncate text-xs font-semibold text-violet-300">{subtitle(row)}</p>}
       <div className="mt-2 flex items-end gap-2"><strong className="text-4xl font-black text-white">{row.uploads}</strong><span className="pb-1 text-xs uppercase tracking-[.18em] text-cyan-300">uploads</span></div>
     </motion.div>)}
   </div>;
 }
 
-function RankTable({ rows, label, showRole = false }: { rows: Array<Person | Team>; label: (row: Person | Team) => string; showRole?: boolean }) {
+function RankTable({ rows, label, subtitle, showRole = false }: { rows: Array<Person | Team>; label: (row: Person | Team) => string; subtitle?: (row: Person | Team) => string | null; showRole?: boolean }) {
   return <div className="overflow-x-auto rounded-3xl border border-white/10 bg-slate-950/55 backdrop-blur-xl">
     <table className="w-full min-w-[650px] text-left"><thead><tr className="text-[11px] uppercase tracking-[.18em] text-slate-500"><th className="px-5 py-4">Rank</th><th className="px-5 py-4">Competitor</th>{showRole && <th className="px-5 py-4">Role</th>}<th className="px-5 py-4">Uploads</th><th className="px-5 py-4">Last upload</th><th className="px-5 py-4">Status</th></tr></thead>
-      <tbody className="divide-y divide-white/5">{rows.map((row, index) => <tr key={`${row.id}-${index}`} className="group hover:bg-indigo-500/5 transition-colors"><td className="px-5 py-4"><span className={`inline-flex w-9 h-9 items-center justify-center rounded-xl font-black ${index < 3 ? `bg-gradient-to-br ${medals[index]} text-slate-950` : 'bg-white/5 text-slate-400'}`}>{index + 1}</span></td><td className="px-5 py-4"><div className="font-bold text-white">{label(row)}</div>{'managerUsername' in row && <div className="text-xs text-slate-500">Led by {row.managerUsername}</div>}</td>{showRole && <td className="px-5 py-4 text-sm text-violet-300">{roleLabels[(row as Person).role!]}</td>}<td className="px-5 py-4"><span className="inline-flex items-center gap-2 font-black text-cyan-300"><Zap className="w-4 h-4" />{row.uploads}</span></td><td className="px-5 py-4 text-sm text-slate-400">{row.lastUploadAt ? new Date(row.lastUploadAt).toLocaleString() : 'No uploads yet'}</td><td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${row.isActive ? 'bg-emerald-400/10 text-emerald-300' : 'bg-slate-500/10 text-slate-500'}`}>{row.isActive ? 'Active' : 'Disabled'}</span></td></tr>)}</tbody>
+      <tbody className="divide-y divide-white/5">{rows.map((row, index) => <tr key={`${row.id}-${index}`} className="group hover:bg-indigo-500/5 transition-colors"><td className="px-5 py-4"><span className={`inline-flex w-9 h-9 items-center justify-center rounded-xl font-black ${index < 3 ? `bg-gradient-to-br ${medals[index]} text-slate-950` : 'bg-white/5 text-slate-400'}`}>{index + 1}</span></td><td className="px-5 py-4"><div className="font-bold text-white">{label(row)}</div>{subtitle?.(row) && <div className="text-xs text-slate-500">{subtitle(row)}</div>}</td>{showRole && <td className="px-5 py-4 text-sm text-violet-300">{roleLabels[(row as Person).role!]}</td>}<td className="px-5 py-4"><span className="inline-flex items-center gap-2 font-black text-cyan-300"><Zap className="w-4 h-4" />{row.uploads}</span></td><td className="px-5 py-4 text-sm text-slate-400">{row.lastUploadAt ? new Date(row.lastUploadAt).toLocaleString() : 'No uploads yet'}</td><td className="px-5 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${row.isActive ? 'bg-emerald-400/10 text-emerald-300' : 'bg-slate-500/10 text-slate-500'}`}>{row.isActive ? 'Active' : 'Disabled'}</span></td></tr>)}</tbody>
     </table>
   </div>;
 }
@@ -52,7 +53,8 @@ export default function Leaderboard({ user, onBack }: { user: { role: Role }; on
   useEffect(() => { void load(); }, []);
   const memberRows = useMemo(() => data?.teamMembers.filter((row) => row.teamId === teamId) ?? [], [data, teamId]);
   const activeRows: Array<Person | Team> = tab === 'function' ? data?.people ?? [] : tab === 'teams' ? data?.teams ?? [] : memberRows;
-  const label = (row: Person | Team) => 'teamName' in row ? row.teamName : row.username;
+  const label = (row: Person | Team) => tab === 'members' ? (row as TeamMember).username : 'teamName' in row ? row.teamName : row.username;
+  const subtitle = (row: Person | Team) => tab === 'members' ? (row as TeamMember).teamName : 'managerUsername' in row ? `Led by ${row.managerUsername}` : null;
 
   async function reset() { if (!window.confirm('Reset every leaderboard score to zero? This cannot be undone.')) return; const response = await fetch('/api/leaderboards/uploads', { method: 'DELETE' }); const result = await response.json().catch(() => ({})); if (!response.ok) return setError(result.error || 'Reset failed'); await load(from || undefined, to || undefined); }
 
@@ -68,7 +70,7 @@ export default function Leaderboard({ user, onBack }: { user: { role: Role }; on
 
       {tab === 'members' && <div className="mb-6 flex items-center gap-3"><span className="text-sm font-bold text-slate-400">Choose team</span><select value={teamId ?? ''} onChange={(event) => setTeamId(Number(event.target.value))} className="rounded-xl border border-violet-400/20 bg-slate-900 px-4 py-3 font-bold text-white outline-none focus:ring-2 focus:ring-violet-500">{data?.teams.map((team) => <option key={team.id} value={team.id}>{team.teamName}</option>)}</select></div>}
       {error && <div className="mb-6 rounded-2xl border border-red-400/20 bg-red-500/10 p-4 text-red-300">{error}</div>}
-      {loading ? <div className="py-28 flex justify-center"><Loader2 className="w-9 h-9 animate-spin text-cyan-300" /></div> : <><Podium rows={activeRows} label={label} /><RankTable rows={activeRows} label={label} showRole={tab === 'function'} />{!activeRows.length && <div className="py-20 text-center text-slate-500"><Crown className="w-12 h-12 mx-auto mb-4" />No competitors in this arena yet.</div>}</>}
+      {loading ? <div className="py-28 flex justify-center"><Loader2 className="w-9 h-9 animate-spin text-cyan-300" /></div> : <><Podium rows={activeRows} label={label} subtitle={subtitle} /><RankTable rows={activeRows} label={label} subtitle={subtitle} showRole={tab === 'function'} />{!activeRows.length && <div className="py-20 text-center text-slate-500"><Crown className="w-12 h-12 mx-auto mb-4" />No competitors in this arena yet.</div>}</>}
     </main>
   </div>;
 }
